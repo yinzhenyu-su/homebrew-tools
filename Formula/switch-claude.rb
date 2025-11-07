@@ -3,7 +3,7 @@ class SwitchClaude < Formula
   homepage "https://github.com/yinzhenyu-su/homebrew-tools"
   url "https://github.com/yinzhenyu-su/homebrew-tools.git",
       tag:      "v1.0.0",
-      revision: "3ae8e1372411f8f65a27d51717e40e4f87e98a47"
+      revision: "fe317f509dda5d2a87f17538de2f2d12ccf14be5"
   license "MIT"
 
   depends_on "jq"
