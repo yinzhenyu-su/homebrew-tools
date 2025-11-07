@@ -78,20 +78,66 @@ EOF
     fi
 }
 
+# 提示用户输入 token
+prompt_for_token() {
+    local provider="$1"
+    local token=""
+
+    echo -e "${YELLOW}未找到 $provider 的 token，正在从终端获取...${NC}"
+    echo ""
+
+    # 提示用户输入 token
+    while [[ -z "$token" ]]; do
+        read -p "请输入 $provider token: " token
+        if [[ -z "$token" ]]; then
+            echo -e "${RED}Token 不能为空，请重新输入${NC}"
+        fi
+    done
+
+    echo ""
+    # 询问用户是否要保存 token
+    read -p "是否要保存 token 到 Keychain? (推荐) (y/n): " save_choice
+    save_choice=${save_choice:-n}  # 默认值为 n
+
+    if [[ "$save_choice" =~ ^[Yy] ]]; then
+        # 保存到 Keychain
+        set_token_keychain "$provider" "$token"
+        if [[ $? -eq 0 ]]; then
+            echo -e "${GREEN}Token 已保存到 Keychain${NC}"
+        else
+            echo -e "${YELLOW}保存到 Keychain 失败，但将继续使用${NC}"
+        fi
+    else
+        # 询问是否保存到文件
+        read -p "是否要保存 token 到配置文件? (y/n): " save_file_choice
+        save_file_choice=${save_file_choice:-n}
+        if [[ "$save_file_choice" =~ ^[Yy] ]]; then
+            set_token "$provider" "$token"
+            if [[ $? -eq 0 ]]; then
+                echo -e "${GREEN}Token 已保存到配置文件${NC}"
+            else
+                echo -e "${YELLOW}保存到配置文件失败，但将继续使用${NC}"
+            fi
+        fi
+    fi
+
+    echo "$token"
+}
+
 # 读取 token
 read_token() {
     local provider="$1"
-    
+
     # 优先从 Keychain 读取
     local token=$(security find-generic-password -a "$USER" -s "switch-claude-$provider" -w 2>/dev/null)
-    
+
     # 如果 Keychain 没有，从文件读取
     if [[ -z "$token" && -f "$TOKENS_FILE" ]]; then
         if command -v jq >/dev/null 2>&1; then
             token=$(jq -r ".$provider // empty" "$TOKENS_FILE" 2>/dev/null)
         fi
     fi
-    
+
     # 如果还是没有，从环境变量读取
     if [[ -z "$token" ]]; then
         case "$provider" in
@@ -100,7 +146,20 @@ read_token() {
             "minimax") token="$MINIMAX_TOKEN" ;;
         esac
     fi
-    
+
+    # 如果所有方式都失败，提示用户输入
+    if [[ -z "$token" ]]; then
+        echo ""
+        echo -e "${YELLOW}=== Token 未设置 ===${NC}"
+        echo -e "${BLUE}设置 token 的方法:${NC}"
+        echo "  1. 通过命令行: switch-claude set-keychain $provider YOUR_TOKEN"
+        echo "  2. 通过环境变量: export ${provider^^}_TOKEN=YOUR_TOKEN"
+        echo ""
+        echo "或者现在从终端输入:"
+
+        token=$(prompt_for_token "$provider")
+    fi
+
     echo "$token"
 }
 
@@ -147,23 +206,23 @@ set_token() {
 set_token_keychain() {
     local provider="$1"
     local token="$2"
-    
+
     if [[ -z "$provider" || -z "$token" ]]; then
         echo -e "${RED}错误: 请提供 provider 和 token${NC}"
         return 1
     fi
-    
+
     case "$provider" in
         "glm"|"kimi"|"minimax") ;;
-        *) 
+        *)
             echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
             return 1
             ;;
     esac
-    
+
     # 删除现有的（如果存在）
     security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
-    
+
     # 添加新的
     security add-generic-password -a "$USER" -s "switch-claude-$provider" -w "$token" 2>/dev/null
     if [[ $? -eq 0 ]]; then
@@ -171,6 +230,50 @@ set_token_keychain() {
     else
         echo -e "${RED}存储到 Keychain 失败${NC}"
         return 1
+    fi
+}
+
+# 清空 Keychain 中的 token
+clear_token_keychain() {
+    local provider="$1"
+
+    if [[ -z "$provider" ]]; then
+        echo -e "${RED}错误: 请提供 provider${NC}"
+        return 1
+    fi
+
+    case "$provider" in
+        "glm"|"kimi"|"minimax") ;;
+        *)
+            echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
+            echo "支持的 provider: glm, kimi, minimax"
+            return 1
+            ;;
+    esac
+
+    # 从 Keychain 删除
+    security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}已从 Keychain 中清空 $provider token${NC}"
+    else
+        echo -e "${YELLOW}Keychain 中可能没有 $provider token${NC}"
+    fi
+}
+
+# 清空所有 Keychain 中的 tokens
+clear_all_tokens_keychain() {
+    local count=0
+    for provider in glm kimi minimax; do
+        security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
+        if [[ $? -eq 0 ]]; then
+            count=$((count + 1))
+        fi
+    done
+
+    if [[ $count -gt 0 ]]; then
+        echo -e "${GREEN}已从 Keychain 中清空 $count 个 token${NC}"
+    else
+        echo -e "${YELLOW}Keychain 中没有找到任何 token${NC}"
     fi
 }
 
@@ -341,18 +444,9 @@ update_config() {
 switch_to_glm() {
     local launch_claude="$1"
     shift  # 移除第一个参数，剩余参数传递给 claude
-    
+
     local token=$(read_token "glm")
-    if [[ -z "$token" ]]; then
-        echo -e "${RED}错误: 未找到 GLM token${NC}"
-        echo ""
-        echo -e "${YELLOW}请通过以下方式之一设置 GLM token:${NC}"
-        echo "  switch-claude set-token glm YOUR_TOKEN"
-        echo "  switch-claude set-keychain glm YOUR_TOKEN  # 推荐"
-        echo "  export GLM_TOKEN=YOUR_TOKEN"
-        return 1
-    fi
-    
+
     local glm_config="{
         \"ANTHROPIC_AUTH_TOKEN\": \"$token\",
         \"ANTHROPIC_BASE_URL\": \"https://open.bigmodel.cn/api/anthropic\",
@@ -369,18 +463,9 @@ switch_to_glm() {
 switch_to_kimi() {
     local launch_claude="$1"
     shift  # 移除第一个参数，剩余参数传递给 claude
-    
+
     local token=$(read_token "kimi")
-    if [[ -z "$token" ]]; then
-        echo -e "${RED}错误: 未找到 Kimi token${NC}"
-        echo ""
-        echo -e "${YELLOW}请通过以下方式之一设置 Kimi token:${NC}"
-        echo "  switch-claude set-token kimi YOUR_TOKEN"
-        echo "  switch-claude set-keychain kimi YOUR_TOKEN  # 推荐"
-        echo "  export KIMI_TOKEN=YOUR_TOKEN"
-        return 1
-    fi
-    
+
     local kimi_config="{
         \"ANTHROPIC_BASE_URL\": \"https://api.moonshot.cn/anthropic\",
         \"ANTHROPIC_AUTH_TOKEN\": \"$token\",
@@ -394,18 +479,9 @@ switch_to_kimi() {
 switch_to_minimax() {
     local launch_claude="$1"
     shift  # 移除第一个参数，剩余参数传递给 claude
-    
+
     local token=$(read_token "minimax")
-    if [[ -z "$token" ]]; then
-        echo -e "${RED}错误: 未找到 Minimax token${NC}"
-        echo ""
-        echo -e "${YELLOW}请通过以下方式之一设置 Minimax token:${NC}"
-        echo "  switch-claude set-token minimax YOUR_TOKEN"
-        echo "  switch-claude set-keychain minimax YOUR_TOKEN  # 推荐"
-        echo "  export MINIMAX_TOKEN=YOUR_TOKEN"
-        return 1
-    fi
-    
+
     local minimax_config="{
         \"ANTHROPIC_BASE_URL\": \"https://api.minimaxi.com/anthropic\",
         \"ANTHROPIC_AUTH_TOKEN\": \"$token\",
@@ -481,10 +557,12 @@ show_help() {
     echo "  clear    清空所有配置"
     echo ""
     echo "Token 管理选项:"
-    echo "  set-token <provider> <token>        设置 token 到配置文件"
-    echo "  set-keychain <provider> <token>     设置 token 到 Keychain (推荐)"
-    echo "  show-tokens                         显示所有 token 状态"
-    echo "  show-token <provider>               显示特定 provider 的 token 状态"
+    echo "  set-token <provider> <token>           设置 token 到配置文件"
+    echo "  set-keychain <provider> <token>        设置 token 到 Keychain (推荐)"
+    echo "  show-tokens                            显示所有 token 状态"
+    echo "  show-token <provider>                  显示特定 provider 的 token 状态"
+    echo "  clear-keychain <provider>              清空 Keychain 中特定 provider 的 token"
+    echo "  clear-all-keychains                    清空 Keychain 中的所有 tokens"
     echo ""
     echo "其他选项:"
     echo "  help     显示此帮助信息"
@@ -501,10 +579,12 @@ show_help() {
     echo "  switch-claude minimax --launch 帮我写个Python脚本  # 切换到 Minimax 并启动 Claude Code，发送请求"
     echo ""
     echo "Token 管理示例:"
-    echo "  switch-claude set-token glm sk-xxx...           # 设置 GLM token 到文件"
-    echo "  switch-claude set-keychain kimi sk-yyy...       # 设置 Kimi token 到 Keychain"
-    echo "  switch-claude show-tokens                       # 显示所有 token 状态"
-    echo "  switch-claude show-token glm                    # 显示 GLM token 状态"
+    echo "  switch-claude set-token glm sk-xxx...            # 设置 GLM token 到文件"
+    echo "  switch-claude set-keychain kimi sk-yyy...        # 设置 Kimi token 到 Keychain"
+    echo "  switch-claude show-tokens                        # 显示所有 token 状态"
+    echo "  switch-claude show-token glm                     # 显示 GLM token 状态"
+    echo "  switch-claude clear-keychain kimi                # 清空 Keychain 中 Kimi token"
+    echo "  switch-claude clear-all-keychains                # 清空 Keychain 中的所有 tokens"
     echo ""
     echo -e "${YELLOW}说明:${NC}"
     echo "  - 此脚本通过修改 ~/.claude/settings.json 文件来切换模型"
@@ -526,7 +606,7 @@ main() {
 
     # Token 管理命令（不使用 --launch 参数）
     case "${1:-}" in
-        "set-token"|"set-keychain"|"show-tokens"|"show-token")
+        "set-token"|"set-keychain"|"show-tokens"|"show-token"|"clear-keychain"|"clear-all-keychains")
             case "$1" in
                 "set-token")
                     if [[ $# -ne 3 ]]; then
@@ -557,6 +637,18 @@ main() {
                         return 1
                     fi
                     show_token_status "$2"
+                    ;;
+                "clear-keychain")
+                    if [[ $# -ne 2 ]]; then
+                        echo -e "${RED}错误: clear-keychain 需要 1 个参数${NC}"
+                        echo "用法: switch-claude clear-keychain <provider>"
+                        echo "支持的 provider: glm, kimi, minimax"
+                        return 1
+                    fi
+                    clear_token_keychain "$2"
+                    ;;
+                "clear-all-keychains")
+                    clear_all_tokens_keychain
                     ;;
             esac
             return $?
