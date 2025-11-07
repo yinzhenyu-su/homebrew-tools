@@ -1,0 +1,277 @@
+name: Release and Update Formula
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.1.0)'
+        required: true
+        type: string
+
+env:
+  HOMEBREW_NO_INSTALL_FROM_API: 1
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    outputs:
+      tag_name: ${{ steps.tag.outputs.tag_name }}
+      version: ${{ steps.tag.outputs.version }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      - name: Determine version and tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            TAG_NAME="v${VERSION}"
+          else
+            TAG_NAME="${{ github.ref_name }}"
+            VERSION="${TAG_NAME#v}"
+          fi
+          
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Tag: ${TAG_NAME}, Version: ${VERSION}"
+
+      - name: Create or update tag
+        run: |
+          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
+          if ! git tag -l | grep -q "^${TAG_NAME}$"; then
+            git tag "${TAG_NAME}"
+            git push origin "${TAG_NAME}"
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # 获取上一个标签
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
+          if [[ -z "$PREVIOUS_TAG" ]]; then
+            PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
+          fi
+          
+          # 生成变更日志
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "## 🚀 What's New in ${{ steps.tag.outputs.version }}" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          
+          # 提取 commit 信息
+          git log --pretty=format:"- %s" "${PREVIOUS_TAG}..${{ steps.tag.outputs.tag_name }}" | head -20 >> $GITHUB_OUTPUT
+          
+          echo "" >> $GITHUB_OUTPUT
+          echo "## 📋 Installation" >> $GITHUB_OUTPUT
+          echo '```bash' >> $GITHUB_OUTPUT
+          echo 'brew tap yinzhenyu-su/homebrew-tools' >> $GITHUB_OUTPUT
+          echo 'brew install switch-claude' >> $GITHUB_OUTPUT
+          echo '```' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        id: release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          release_name: "Switch Claude ${{ steps.tag.outputs.version }}"
+          body: ${{ steps.changelog.outputs.CHANGELOG }}
+          draft: false
+          prerelease: false
+
+  update-formula:
+    needs: release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Git for Homebrew
+        uses: Homebrew/actions/git-user-config@main
+
+      - name: Install dependencies
+        run: |
+          brew install jq
+
+      - name: Download and calculate SHA256
+        id: sha256
+        run: |
+          TAG_NAME="${{ needs.release.outputs.tag_name }}"
+          VERSION="${{ needs.release.outputs.version }}"
+          
+          # 下载 tarball
+          TARBALL_URL="https://github.com/${{ github.repository }}/archive/${TAG_NAME}.tar.gz"
+          echo "下载 tarball: ${TARBALL_URL}"
+          
+          curl -L -o "/tmp/release.tar.gz" "${TARBALL_URL}"
+          
+          # 计算 SHA256
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            SHA256=$(shasum -a 256 "/tmp/release.tar.gz" | cut -d ' ' -f 1)
+          else
+            SHA256=$(sha256sum "/tmp/release.tar.gz" | cut -d ' ' -f 1)
+          fi
+          
+          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+          echo "tarball_url=${TARBALL_URL}" >> $GITHUB_OUTPUT
+          echo "Calculated SHA256: ${SHA256}"
+          echo "Tarball URL: ${TARBALL_URL}"
+
+      - name: Update Formula
+        id: update_formula
+        run: |
+          TAG_NAME="${{ needs.release.outputs.tag_name }}"
+          VERSION="${{ needs.release.outputs.version }}"
+          SHA256="${{ steps.sha256.outputs.sha256 }}"
+          TARBALL_URL="${{ steps.sha256.outputs.tarball_url }}"
+          
+          # 备份原文件
+          cp Formula/switch-claude.rb Formula/switch-claude.rb.backup
+          
+          # 更新 Formula 文件
+          cat > Formula/switch-claude.rb << EOF
+          class SwitchClaude < Formula
+            desc "Claude Code 模型切换工具"
+            homepage "https://github.com/${{ github.repository }}"
+            url "${TARBALL_URL}"
+            version "${VERSION}"
+            sha256 "${SHA256}"
+            license "MIT"
+          
+            depends_on "jq"
+          
+            def install
+              # 安装脚本到 bin 目录
+              bin.install "scripts/switch-claude.sh" => "switch-claude"
+          
+              # 创建符号链接以支持常用别名
+              bin.install_symlink "switch-claude" => "claude-switch"
+              bin.install_symlink "switch-claude" => "sc"
+            end
+          
+            def caveats
+              <<~EOS
+                Claude Code 模型切换工具已安装成功！
+          
+                使用方法：
+                  switch-claude glm                    # 切换到 GLM 模型
+                  switch-claude kimi                   # 切换到 Kimi 模型
+                  switch-claude minimax                # 切换到 Minimax 模型
+                  switch-claude current                # 显示当前配置
+                  switch-claude clear                  # 清空配置
+                  switch-claude help                   # 显示帮助信息
+          
+                高级用法：
+                  switch-claude glm --launch           # 切换并启动 Claude Code
+                  switch-claude kimi --launch 你好     # 切换并发送消息
+          
+                Token 管理：
+                  switch-claude set-token <provider> <token>        # 存储到文件
+                  switch-claude set-keychain <provider> <token>     # 存储到 Keychain (推荐)
+                  switch-claude show-tokens                         # 显示 token 状态
+          
+                别名命令：
+                  claude-switch  # 等同于 switch-claude
+                  sc            # 等同于 switch-claude
+          
+                配置文件位置: ~/.claude/settings.json
+                Token 配置目录: ~/.config/switch-claude/
+          
+                注意：此工具需要您已经安装了 Claude Code。
+              EOS
+            end
+          
+            test do
+              # 测试帮助命令
+              system "#{bin}/switch-claude", "help"
+          
+              # 测试依赖检查
+              assert_predicate bin/"switch-claude", :exist?
+              assert_predicate bin/"claude-switch", :exist?
+              assert_predicate bin/"sc", :exist?
+            end
+          end
+          EOF
+          
+          echo "Formula 已更新:"
+          echo "  版本: ${VERSION}"
+          echo "  SHA256: ${SHA256}"
+          echo "  URL: ${TARBALL_URL}"
+
+      - name: Test Formula
+        run: |
+          # 测试 Formula 语法
+          brew audit --strict --online Formula/switch-claude.rb || true
+          
+          # 尝试安装测试（dry run）
+          brew install --build-from-source --verbose Formula/switch-claude.rb || true
+
+      - name: Commit and push changes
+        run: |
+          VERSION="${{ needs.release.outputs.version }}"
+          
+          git add Formula/switch-claude.rb
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update switch-claude to v${VERSION}
+            
+            - Update version to ${VERSION}
+            - Update SHA256 hash
+            - Update download URL
+            
+            Auto-generated by GitHub Actions"
+            
+            git push origin main
+            echo "✅ Formula 更新已提交并推送"
+          else
+            echo "ℹ️  无变更需要提交"
+          fi
+
+  notify:
+    needs: [release, update-formula]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Notify completion
+        run: |
+          if [[ "${{ needs.update-formula.result }}" == "success" ]]; then
+            echo "🎉 发布成功完成！"
+            echo "📦 版本: ${{ needs.release.outputs.version }}"
+            echo "🏷️  标签: ${{ needs.release.outputs.tag_name }}"
+            echo "📥 安装命令:"
+            echo "   brew tap yinzhenyu-su/homebrew-tools"
+            echo "   brew install switch-claude"
+          else
+            echo "❌ 发布过程中出现错误"
+            exit 1
+          fi

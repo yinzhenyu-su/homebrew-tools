@@ -1,0 +1,89 @@
+name: Test Release Process
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_version:
+        description: 'Test version (e.g., 1.0.0-test)'
+        required: true
+        default: '1.0.0-test'
+
+jobs:
+  test-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Run quick tests
+        run: |
+          chmod +x ./tests/test-quick.sh
+          ./tests/test-quick.sh
+
+      - name: Test Formula syntax
+        run: |
+          ruby -c Formula/switch-claude.rb
+
+      - name: Test script functionality
+        run: |
+          chmod +x ./scripts/switch-claude.sh
+          ./scripts/switch-claude.sh help
+          ./scripts/switch-claude.sh current || true
+          ./scripts/switch-claude.sh show-tokens
+
+      - name: Simulate SHA256 calculation
+        run: |
+          VERSION="${{ github.event.inputs.test_version }}"
+          echo "Testing with version: $VERSION"
+          
+          # 模拟下载和SHA256计算过程
+          echo "模拟创建tarball..."
+          tar -czf "/tmp/test-${VERSION}.tar.gz" --exclude='.git' .
+          
+          # 计算SHA256
+          SHA256=$(sha256sum "/tmp/test-${VERSION}.tar.gz" | cut -d ' ' -f 1)
+          echo "计算得到的SHA256: $SHA256"
+          
+          # 验证SHA256格式
+          if [[ ${#SHA256} -eq 64 ]]; then
+            echo "✅ SHA256格式正确"
+          else
+            echo "❌ SHA256格式错误"
+            exit 1
+          fi
+
+      - name: Test version release script
+        run: |
+          chmod +x ./scripts/release.sh
+          ./scripts/release.sh current
+          
+          # 测试版本验证功能
+          if ./scripts/release.sh help | grep -q "版本发布脚本"; then
+            echo "✅ 发布脚本正常"
+          else
+            echo "❌ 发布脚本异常"
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "🎉 发布流程测试完成！"
+          echo ""
+          echo "✅ 已验证的组件："
+          echo "- 脚本语法和功能"
+          echo "- Formula语法"
+          echo "- 发布脚本"
+          echo "- SHA256计算逻辑"
+          echo ""
+          echo "🚀 准备就绪，可以进行正式发布！"

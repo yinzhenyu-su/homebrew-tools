@@ -1,0 +1,52 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*~
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Local configuration
+.env
+.env.local
+config.local.*
+
+# Test outputs
+test-output/
+coverage/
+
+# Token files (security)
+tokens.json
+*.token
+*.key
+.secrets/
+*backup*.sh
+tokens-backup*
+*-token-*
+*.credentials
+
+# Homebrew specific
+*.bottle.*
+.brew_home/
