@@ -1,9 +1,9 @@
 class SwitchClaude < Formula
   desc "Claude Code model switching tool"
   homepage "https://github.com/yinzhenyu-su/homebrew-tools"
-  url "https://github.com/yinzhenyu-su/homebrew-tools/archive/v1.0.0.tar.gz"
-  version "1.0.0"
-  sha256 "ce3b5c75b5c7971098fcfc1f1bb5b67cefbaf69c45b6c9cdc3cb21241c6549ba"
+  url "https://github.com/yinzhenyu-su/homebrew-tools.git",
+      tag:      "v1.0.0",
+      revision: "3ae8e1372411f8f65a27d51717e40e4f87e98a47"
   license "MIT"
 
   depends_on "jq"
@@ -48,8 +48,8 @@ class SwitchClaude < Formula
 
   test do
     system "#{bin}/switch-claude", "help"
-    assert_predicate bin/"switch-claude", :exist?
-    assert_predicate bin/"claude-switch", :exist?
-    assert_predicate bin/"sc", :exist?
+    assert_path_exists bin/"switch-claude"
+    assert_path_exists bin/"claude-switch"
+    assert_path_exists bin/"sc"
   end
 end
