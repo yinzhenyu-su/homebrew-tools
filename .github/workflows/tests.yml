@@ -45,7 +45,7 @@ jobs:
 
       - run: brew test-bot --only-setup
 
-      - run: brew style --fix yinzhenyu-su/tools
+      - run: chmod +x ./tests/test-quick.sh && ./tests/test-quick.sh && echo "✅ Custom tests passed"
       
       - run: brew test-bot --only-formulae
         if: github.event_name == 'pull_request'
