@@ -48,7 +48,7 @@ EOF
 get_current_version() {
     local version
     if [[ -f "Formula/switch-claude.rb" ]]; then
-        version=$(grep 'version' Formula/switch-claude.rb | sed -E 's/.*version[[:space:]]*"([^\"]+)".*/\1/' | head -1) || true
+        version=$(grep 'version' Formula/switch-claude.rb | sed -E 's/.*version[[:space:]]*"([^"]+)".*/\1/' | head -1) || true
     else
         version="0.0.0"
     fi
@@ -80,7 +80,6 @@ increment_version() {
             ;;
         *)
             printf '%s\n' "${version}"
-            return 0
             ;;
     esac
 }
@@ -144,7 +143,7 @@ update_version_in_files() {
     printf '%b\n' "${BLUE}更新版本信息到 ${new_version}...${NC}"
 
     if [[ -f "scripts/switch-claude.sh" ]]; then
-        sed -E "s/^# (.*)/# \1 v${new_version}/" "scripts/switch-claude.sh" > "scripts/switch-claude.sh.tmp" || true
+        sed -E "s/^# Claude Code 模型切换脚本.*/# Claude Code 模型切换脚本 v${new_version}/" "scripts/switch-claude.sh" > "scripts/switch-claude.sh.tmp" || true
         mv "scripts/switch-claude.sh.tmp" "scripts/switch-claude.sh"
         printf '%b\n' "✅ 已更新 scripts/switch-claude.sh"
     fi
