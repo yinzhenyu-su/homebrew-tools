@@ -19,6 +19,57 @@ CONFIG_FILE="$HOME/.claude/settings.json"
 CONFIG_DIR="$HOME/.config/switch-claude"
 TOKENS_FILE="$CONFIG_DIR/tokens.json"
 
+# ========== 公共函数 ==========
+
+# 清理 token 中的换行符和回车符
+clean_token() {
+    local token="$1"
+    # 删除所有换行符和回车符，以及首尾空格
+    # 使用原生 bash 操作避免 subshell 问题
+    token="${token//[$'\r\n']/}"  # 删除所有换行符和回车符
+    token="${token#"${token%%[![:space:]]*}"}"  # 删除前缀空格
+    token="${token%"${token##*[![:space:]]}"}"  # 删除后缀空格
+    echo "$token"
+}
+
+# 验证 provider 是否有效
+validate_provider() {
+    local provider="$1"
+    case "$provider" in
+        "glm"|"kimi"|"minimax") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# 提示用户选择保存位置
+prompt_save_location() {
+    local provider="$1"
+    local token="$2"
+
+    # 检查是否有 gum 命令可用
+    if command -v gum >/dev/null 2>&1; then
+        # 使用 gum 提供美观的确认界面
+        gum confirm "保存到 Keychain? (推荐)" --affirmative "是" --negative "否" && \
+            set_token_keychain "$provider" "$token" 2>/dev/null || \
+            (gum confirm "保存到配置文件?" --affirmative "是" --negative "否" && \
+             set_token "$provider" "$token" 2>/dev/null)
+    else
+        # 降级到原生 bash read
+        read -p "保存到 Keychain? (推荐) (y/n): " save_choice
+        save_choice=${save_choice:-n}
+
+        if [[ "$save_choice" =~ ^[Yy] ]]; then
+            set_token_keychain "$provider" "$token" 2>/dev/null
+        else
+            read -p "保存到配置文件? (y/n): " save_file_choice
+            save_file_choice=${save_file_choice:-n}
+            if [[ "$save_file_choice" =~ ^[Yy] ]]; then
+                set_token "$provider" "$token" 2>/dev/null
+            fi
+        fi
+    fi
+}
+
 # 备份配置文件
 backup_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -83,44 +134,25 @@ prompt_for_token() {
     local provider="$1"
     local token=""
 
-    echo -e "${YELLOW}未找到 $provider 的 token，正在从终端获取...${NC}"
-    echo ""
+    echo -e "${YELLOW}未找到 $provider 的 token${NC}"
 
     # 提示用户输入 token
     while [[ -z "$token" ]]; do
-        read -p "请输入 $provider token: " token
+        token=$(gum input --placeholder "请输入 $provider token")
+        # read -p "请输入 $provider token: " token
         if [[ -z "$token" ]]; then
             echo -e "${RED}Token 不能为空，请重新输入${NC}"
         fi
     done
 
-    echo ""
-    # 询问用户是否要保存 token
-    read -p "是否要保存 token 到 Keychain? (推荐) (y/n): " save_choice
-    save_choice=${save_choice:-n}  # 默认值为 n
+    # 清理 token
+    token=$(clean_token "$token")
 
-    if [[ "$save_choice" =~ ^[Yy] ]]; then
-        # 保存到 Keychain
-        set_token_keychain "$provider" "$token"
-        if [[ $? -eq 0 ]]; then
-            echo -e "${GREEN}Token 已保存到 Keychain${NC}"
-        else
-            echo -e "${YELLOW}保存到 Keychain 失败，但将继续使用${NC}"
-        fi
-    else
-        # 询问是否保存到文件
-        read -p "是否要保存 token 到配置文件? (y/n): " save_file_choice
-        save_file_choice=${save_file_choice:-n}
-        if [[ "$save_file_choice" =~ ^[Yy] ]]; then
-            set_token "$provider" "$token"
-            if [[ $? -eq 0 ]]; then
-                echo -e "${GREEN}Token 已保存到配置文件${NC}"
-            else
-                echo -e "${YELLOW}保存到配置文件失败，但将继续使用${NC}"
-            fi
-        fi
-    fi
+    # echo ""
+    # 询问用户选择保存位置
+    prompt_save_location "$provider" "$token"
 
+    # 返回 token
     echo "$token"
 }
 
@@ -149,48 +181,40 @@ read_token() {
 
     # 如果所有方式都失败，提示用户输入
     if [[ -z "$token" ]]; then
-        echo ""
-        echo -e "${YELLOW}=== Token 未设置 ===${NC}"
-        echo -e "${BLUE}设置 token 的方法:${NC}"
-        echo "  1. 通过命令行: switch-claude set-keychain $provider YOUR_TOKEN"
-        echo "  2. 通过环境变量: export ${provider^^}_TOKEN=YOUR_TOKEN"
-        echo ""
-        echo "或者现在从终端输入:"
-
         token=$(prompt_for_token "$provider")
     fi
 
-    echo "$token"
+    # 清理 token 并返回
+    clean_token "$token"
 }
 
 # 设置 token 到文件
 set_token() {
     local provider="$1"
     local token="$2"
-    
+
     if [[ -z "$provider" || -z "$token" ]]; then
         echo -e "${RED}错误: 请提供 provider 和 token${NC}"
         return 1
     fi
-    
-    case "$provider" in
-        "glm"|"kimi"|"minimax") ;;
-        *) 
-            echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
-            echo "支持的 provider: glm, kimi, minimax"
-            return 1
-            ;;
-    esac
-    
+
+    if ! validate_provider "$provider"; then
+        echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
+        echo "支持的 provider: glm, kimi, minimax"
+        return 1
+    fi
+
+    # 清理 token
+    token=$(clean_token "$token")
+
     create_tokens_file
-    
+
     if command -v jq >/dev/null 2>&1; then
         local temp_file=$(mktemp)
         jq --arg provider "$provider" --arg token "$token" '.[$provider] = $token' "$TOKENS_FILE" > "$temp_file"
         if [[ $? -eq 0 ]]; then
             mv "$temp_file" "$TOKENS_FILE"
             chmod 600 "$TOKENS_FILE"
-            echo -e "${GREEN}已设置 $provider token${NC}"
         else
             echo -e "${RED}设置 token 失败${NC}"
             rm -f "$temp_file"
@@ -212,22 +236,20 @@ set_token_keychain() {
         return 1
     fi
 
-    case "$provider" in
-        "glm"|"kimi"|"minimax") ;;
-        *)
-            echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
-            return 1
-            ;;
-    esac
+    if ! validate_provider "$provider"; then
+        echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
+        return 1
+    fi
+
+    # 清理 token
+    token=$(clean_token "$token")
 
     # 删除现有的（如果存在）
     security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
 
     # 添加新的
     security add-generic-password -a "$USER" -s "switch-claude-$provider" -w "$token" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-        echo -e "${GREEN}已将 $provider token 存储到 Keychain${NC}"
-    else
+    if [[ $? -ne 0 ]]; then
         echo -e "${RED}存储到 Keychain 失败${NC}"
         return 1
     fi
@@ -242,14 +264,11 @@ clear_token_keychain() {
         return 1
     fi
 
-    case "$provider" in
-        "glm"|"kimi"|"minimax") ;;
-        *)
-            echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
-            echo "支持的 provider: glm, kimi, minimax"
-            return 1
-            ;;
-    esac
+    if ! validate_provider "$provider"; then
+        echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
+        echo "支持的 provider: glm, kimi, minimax"
+        return 1
+    fi
 
     # 从 Keychain 删除
     security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
@@ -280,7 +299,7 @@ clear_all_tokens_keychain() {
 # 显示 token 状态
 show_token_status() {
     local provider="$1"
-    
+
     if [[ -n "$provider" ]]; then
         # 显示特定 provider 的 token
         local token=$(read_token "$provider")
@@ -447,16 +466,26 @@ switch_to_glm() {
 
     local token=$(read_token "glm")
 
-    local glm_config="{
-        \"ANTHROPIC_AUTH_TOKEN\": \"$token\",
-        \"ANTHROPIC_BASE_URL\": \"https://open.bigmodel.cn/api/anthropic\",
-        \"API_TIMEOUT_MS\": \"3000000\",
-        \"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"1\",
-        \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"glm-4.5-air\",
-        \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"glm-4.6\",
-        \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"glm-4.6\"
-    }"
-    update_config "GLM" "$glm_config" "$launch_claude" "$@"
+    # 使用 jq 构建 JSON 配置
+    local env_config=$(jq -n \
+        --arg token "$token" \
+        --arg base_url "https://open.bigmodel.cn/api/anthropic" \
+        --arg timeout "3000000" \
+        --arg disable_traffic "1" \
+        --arg haiku_model "glm-4.5-air" \
+        --arg sonnet_model "glm-4.6" \
+        --arg opus_model "glm-4.6" \
+        '{
+            ANTHROPIC_AUTH_TOKEN: $token,
+            ANTHROPIC_BASE_URL: $base_url,
+            API_TIMEOUT_MS: $timeout,
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: $disable_traffic,
+            ANTHROPIC_DEFAULT_HAIKU_MODEL: $haiku_model,
+            ANTHROPIC_DEFAULT_SONNET_MODEL: $sonnet_model,
+            ANTHROPIC_DEFAULT_OPUS_MODEL: $opus_model
+        }')
+
+    update_config "GLM" "$env_config" "$launch_claude" "$@"
 }
 
 # Kimi 配置
@@ -466,13 +495,20 @@ switch_to_kimi() {
 
     local token=$(read_token "kimi")
 
-    local kimi_config="{
-        \"ANTHROPIC_BASE_URL\": \"https://api.moonshot.cn/anthropic\",
-        \"ANTHROPIC_AUTH_TOKEN\": \"$token\",
-        \"ANTHROPIC_MODEL\": \"kimi-k2-turbo-preview\",
-        \"ANTHROPIC_SMALL_FAST_MODEL\": \"kimi-k2-turbo-preview\"
-    }"
-    update_config "Kimi" "$kimi_config" "$launch_claude" "$@"
+    # 使用 jq 构建 JSON 配置
+    local env_config=$(jq -n \
+        --arg token "$token" \
+        --arg base_url "https://api.moonshot.cn/anthropic" \
+        --arg model "kimi-k2-turbo-preview" \
+        --arg small_model "kimi-k2-turbo-preview" \
+        '{
+            ANTHROPIC_BASE_URL: $base_url,
+            ANTHROPIC_AUTH_TOKEN: $token,
+            ANTHROPIC_MODEL: $model,
+            ANTHROPIC_SMALL_FAST_MODEL: $small_model
+        }')
+
+    update_config "Kimi" "$env_config" "$launch_claude" "$@"
 }
 
 # Minimax 配置
@@ -482,53 +518,113 @@ switch_to_minimax() {
 
     local token=$(read_token "minimax")
 
-    local minimax_config="{
-        \"ANTHROPIC_BASE_URL\": \"https://api.minimaxi.com/anthropic\",
-        \"ANTHROPIC_AUTH_TOKEN\": \"$token\",
-        \"API_TIMEOUT_MS\": \"3000000\",
-        \"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"1\",
-        \"ANTHROPIC_MODEL\": \"MiniMax-M2\",
-        \"ANTHROPIC_SMALL_FAST_MODEL\": \"MiniMax-M2\",
-        \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"MiniMax-M2\",
-        \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"MiniMax-M2\",
-        \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"MiniMax-M2\"
-    }"
-    update_config "Minimax" "$minimax_config" "$launch_claude" "$@"
+    # 使用 jq 构建 JSON 配置
+    local env_config=$(jq -n \
+        --arg token "$token" \
+        --arg base_url "https://api.minimaxi.com/anthropic" \
+        --arg timeout "3000000" \
+        --arg disable_traffic "1" \
+        --arg model "MiniMax-M2" \
+        --arg small_model "MiniMax-M2" \
+        --arg sonnet_model "MiniMax-M2" \
+        --arg opus_model "MiniMax-M2" \
+        --arg haiku_model "MiniMax-M2" \
+        '{
+            ANTHROPIC_BASE_URL: $base_url,
+            ANTHROPIC_AUTH_TOKEN: $token,
+            API_TIMEOUT_MS: $timeout,
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: $disable_traffic,
+            ANTHROPIC_MODEL: $model,
+            ANTHROPIC_SMALL_FAST_MODEL: $small_model,
+            ANTHROPIC_DEFAULT_SONNET_MODEL: $sonnet_model,
+            ANTHROPIC_DEFAULT_OPUS_MODEL: $opus_model,
+            ANTHROPIC_DEFAULT_HAIKU_MODEL: $haiku_model
+        }')
+
+    update_config "Minimax" "$env_config" "$launch_claude" "$@"
 }
 
 # 清空配置
 clear_config() {
-    echo -e "${YELLOW}清空 Claude Code 配置...${NC}"
+    # 检查是否有 gum 命令可用
+    if command -v gum >/dev/null 2>&1; then
+        # 使用 gum 创建美观的警告框
+        local warning_message=$(gum style --border double --border-foreground red --padding "1 2" --bold --foreground red "警告：即将清空所有配置和数据" "
+此操作将执行以下清空操作：
+  1. 清空 ~/.claude/settings.json 中的环境变量
+  2. 清空 ~/.config/switch-claude/ 文件夹中的所有文件
+  3. 清空 Keychain 中的所有 switch-claude 创建的 model tokens
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo -e "${YELLOW}配置文件不存在，无需清空${NC}"
-        return
+注意：此操作不可撤销！")
+
+        # 显示警告信息
+        echo "$warning_message"
+        echo ""
+
+        # 使用 gum 进行确认
+        gum confirm "确定要继续清空所有配置吗？" --affirmative "确定清空" --negative "取消" || {
+            echo -e "${YELLOW}已取消清空操作${NC}"
+            return 0
+        }
+    else
+        # 降级到原生 bash 界面
+        echo -e "${YELLOW}=== 警告：即将清空所有配置和数据 ===${NC}"
+        echo ""
+        echo "此操作将执行以下清空操作："
+        echo "  1. 清空 ~/.claude/settings.json 中的环境变量"
+        echo "  2. 清空 ~/.config/switch-claude/ 文件夹中的所有文件"
+        echo "  3. 清空 Keychain 中的所有 switch-claude 创建的 model tokens"
+        echo ""
+        echo -e "${RED}注意：此操作不可撤销！${NC}"
+        echo ""
+
+        # 询问用户确认
+        read -p "确定要继续清空所有配置吗？(输入 'yes' 确认): " confirm
+        if [[ "$confirm" != "yes" ]]; then
+            echo -e "${YELLOW}已取消清空操作${NC}"
+            return 0
+        fi
     fi
 
-    # 备份当前配置
-    backup_config
+    echo ""
+    echo -e "${YELLOW}正在清空配置...${NC}"
 
     # 清空环境变量配置
-    local temp_file=$(mktemp)
-    if command -v jq >/dev/null 2>&1; then
-        jq '.env = {}' "$CONFIG_FILE" > "$temp_file"
-        if [[ $? -eq 0 ]]; then
-            mv "$temp_file" "$CONFIG_FILE"
-            echo -e "${GREEN}配置已清空${NC}"
+    if [[ -f "$CONFIG_FILE" ]]; then
+        local temp_file=$(mktemp)
+        if command -v jq >/dev/null 2>&1; then
+            jq '.env = {}' "$CONFIG_FILE" > "$temp_file"
+            if [[ $? -eq 0 ]]; then
+                mv "$temp_file" "$CONFIG_FILE"
+            else
+                echo -e "${RED}清空配置文件失败${NC}"
+                rm -f "$temp_file"
+                return 1
+            fi
         else
-            echo -e "${RED}清空配置失败${NC}"
+            echo -e "${RED}错误: 需要安装 jq 来处理 JSON 配置文件${NC}"
             rm -f "$temp_file"
             return 1
         fi
-    else
-        echo -e "${RED}错误: 需要安装 jq 来处理 JSON 配置文件${NC}"
-        rm -f "$temp_file"
-        return 1
     fi
+
+    # 清空整个 ~/.config/switch-claude 目录
+    if [[ -d "$CONFIG_DIR" ]]; then
+        rm -rf "$CONFIG_DIR"
+        echo -e "${GREEN}已清空配置目录: $CONFIG_DIR${NC}"
+    fi
+
+    # 清空 Keychain 中的所有 tokens
+    clear_all_tokens_keychain
+
+    echo ""
+    echo -e "${GREEN}所有配置和 tokens 已清空完成${NC}"
 }
 
 # 检查依赖
 check_dependencies() {
+    local has_error=0
+
     if ! command -v jq >/dev/null 2>&1; then
         echo -e "${RED}错误: 此脚本需要安装 jq${NC}"
         echo ""
@@ -537,9 +633,18 @@ check_dependencies() {
         echo "  Ubuntu/Debian: sudo apt-get install jq"
         echo "  CentOS/RHEL: sudo yum install jq"
         echo ""
-        return 1
+        has_error=1
     fi
-    return 0
+
+    # 检查 gum 是否可用（可选）
+    if ! command -v gum >/dev/null 2>&1; then
+        echo -e "${YELLOW}提示: 安装 gum 可以获得更美观的交互界面${NC}"
+        echo "  macOS: brew install gum"
+        echo "  其他系统: https://github.com/charmbracelet/gum"
+        echo ""
+    fi
+
+    return $has_error
 }
 
 # 显示使用帮助
@@ -554,7 +659,7 @@ show_help() {
     echo "  kimi     切换到 Kimi 模型"
     echo "  minimax  切换到 Minimax 模型"
     echo "  current  显示当前配置"
-    echo "  clear    清空所有配置"
+    echo "  clear    清空所有配置（需要确认）"
     echo ""
     echo "Token 管理选项:"
     echo "  set-token <provider> <token>           设置 token 到配置文件"
@@ -562,7 +667,7 @@ show_help() {
     echo "  show-tokens                            显示所有 token 状态"
     echo "  show-token <provider>                  显示特定 provider 的 token 状态"
     echo "  clear-keychain <provider>              清空 Keychain 中特定 provider 的 token"
-    echo "  clear-all-keychains                    清空 Keychain 中的所有 tokens"
+    echo "  clear-all-keychains                    清空 Keychain 中的所有 switch-claude 创建的 tokens"
     echo ""
     echo "其他选项:"
     echo "  help     显示此帮助信息"
@@ -584,7 +689,7 @@ show_help() {
     echo "  switch-claude show-tokens                        # 显示所有 token 状态"
     echo "  switch-claude show-token glm                     # 显示 GLM token 状态"
     echo "  switch-claude clear-keychain kimi                # 清空 Keychain 中 Kimi token"
-    echo "  switch-claude clear-all-keychains                # 清空 Keychain 中的所有 tokens"
+    echo "  switch-claude clear-all-keychains                # 清空 Keychain 中的所有 switch-claude 创建的 tokens"
     echo ""
     echo -e "${YELLOW}说明:${NC}"
     echo "  - 此脚本通过修改 ~/.claude/settings.json 文件来切换模型"
@@ -595,6 +700,10 @@ show_help() {
     echo "  - --launch 后的参数会直接传递给 claude 命令，就像直接运行 claude 一样"
     echo "  - Token 配置文件位置: ~/.config/switch-claude/tokens.json"
     echo "  - 推荐使用 Keychain 存储 token 以提高安全性"
+    echo "  - clear 命令会清空所有配置（包括 ~/.config/switch-claude 目录），需要用户确认"
+    echo ""
+    echo -e "${BLUE}可选增强:${NC}"
+    echo "  - 安装 gum 可获得更美观的交互界面: brew install gum"
 }
 
 # 主函数
