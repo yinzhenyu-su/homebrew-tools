@@ -4,8 +4,8 @@
 # 支持 Kimi、GLM、Minimax 三个模型之间的切换
 # 通过修改 ~/.claude/settings.json 文件实现
 # 
-# Homebrew Formula: yinzhenyu-su/homebrew/switch-claude
-# 安装方式: brew tap yinzhenyu-su/homebrew && brew install switch-claude
+# Homebrew Formula: yinzhenyu-su/homebrew-tools/switch-claude
+# 安装方式: brew tap yinzhenyu-su/tools && brew install switch-claude
 
 # 颜色定义
 RED='\033[0;31m'
