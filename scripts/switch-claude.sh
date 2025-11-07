@@ -134,12 +134,10 @@ prompt_for_token() {
     local provider="$1"
     local token=""
 
-    echo -e "${YELLOW}未找到 $provider 的 token${NC}"
-
     # 提示用户输入 token
     while [[ -z "$token" ]]; do
-        token=$(gum input --placeholder "请输入 $provider token")
-        # read -p "请输入 $provider token: " token
+        # token=$(gum input --placeholder "请输入 $provider token")
+        read -p "请输入 $provider token: " token
         if [[ -z "$token" ]]; then
             echo -e "${RED}Token 不能为空，请重新输入${NC}"
         fi
@@ -148,7 +146,6 @@ prompt_for_token() {
     # 清理 token
     token=$(clean_token "$token")
 
-    # echo ""
     # 询问用户选择保存位置
     prompt_save_location "$provider" "$token"
 
@@ -701,9 +698,6 @@ show_help() {
     echo "  - Token 配置文件位置: ~/.config/switch-claude/tokens.json"
     echo "  - 推荐使用 Keychain 存储 token 以提高安全性"
     echo "  - clear 命令会清空所有配置（包括 ~/.config/switch-claude 目录），需要用户确认"
-    echo ""
-    echo -e "${BLUE}可选增强:${NC}"
-    echo "  - 安装 gum 可获得更美观的交互界面: brew install gum"
 }
 
 # 主函数
