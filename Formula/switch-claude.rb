@@ -1,16 +1,12 @@
 class SwitchClaude < Formula
   desc "Claude Code 模型切换工具"
   homepage "https://github.com/yinzhenyu-su/homebrew-tools"
-  url "https://github.com/yinzhenyu-su/homebrew-tools/archive/v1.0.1.tar.gz"
-  version "1.0.1"
-  sha256 "3d008614cb4f1143ef586b5cb60c72ac987608e0e606166fee7aace0f892d001"
+  url "https://github.com/yinzhenyu-su/homebrew-tools/archive/v1.0.2.tar.gz"
+  version "1.0.2"
+  sha256 "37eae9eabd7ff6af5f7a8dbf89816cb9f6b74e37d63763955280c5415ce6fb1e"
   license "MIT"
 
-  # 必需依赖
   depends_on "jq"
-
-  # 可选依赖（提供更美观的交互界面）
-  depends_on "gum"
 
   def install
     # 安装脚本到 bin 目录
@@ -24,7 +20,30 @@ class SwitchClaude < Formula
   def caveats
     <<~EOS
       Claude Code 模型切换工具已安装成功！
-      运行 `switch-claude help` 查看使用说明
+
+      使用方法：
+        switch-claude glm                    # 切换到 GLM 模型
+        switch-claude kimi                   # 切换到 Kimi 模型
+        switch-claude minimax                # 切换到 Minimax 模型
+        switch-claude current                # 显示当前配置
+        switch-claude clear                  # 清空配置
+        switch-claude help                   # 显示帮助信息
+
+      高级用法：
+        switch-claude glm --launch           # 切换并启动 Claude Code
+        switch-claude kimi --launch 你好     # 切换并发送消息
+
+      Token 管理：
+        switch-claude set-token <provider> <token>        # 存储到文件
+        switch-claude set-keychain <provider> <token>     # 存储到 Keychain (推荐)
+        switch-claude show-tokens                         # 显示 token 状态
+
+      别名命令：
+        claude-switch  # 等同于 switch-claude
+        sc            # 等同于 switch-claude
+
+      配置文件位置: ~/.claude/settings.json
+      Token 配置目录: ~/.config/switch-claude/
 
       注意：此工具需要您已经安装了 Claude Code。
     EOS
