@@ -33,6 +33,16 @@ jobs:
 
       - run: brew test-bot --only-cleanup-before
 
+      - name: Clean homebrew-core tap
+        run: |
+          set -euxo pipefail
+          TAP_DIR="/opt/homebrew/Library/Taps/homebrew/homebrew-core"
+          if [ -d "$TAP_DIR" ]; then
+            git -C "$TAP_DIR" reset --hard || true
+            git -C "$TAP_DIR" clean -d -f || true
+            git -C "$TAP_DIR" stash -u || true
+          fi
+
       - run: brew test-bot --only-setup
 
       - run: brew test-bot --only-tap-syntax
