@@ -50,3 +50,5 @@ tokens-backup*
 # Homebrew specific
 *.bottle.*
 .brew_home/
+
+tests/test-report.html

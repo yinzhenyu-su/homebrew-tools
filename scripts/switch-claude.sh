@@ -18,6 +18,43 @@ NC='\033[0m' # No Color
 CONFIG_FILE="$HOME/.claude/settings.json"
 CONFIG_DIR="$HOME/.config/switch-claude"
 TOKENS_FILE="$CONFIG_DIR/tokens.json"
+PROVIDER_CONFIG_FILE="$CONFIG_DIR/provider.json"
+
+# ========== 平台检测模块 ==========
+# 用于跨平台功能检测和动态加载
+
+# 平台检测变量
+OS_TYPE=""
+HAS_JQ=false
+HAS_KEYCHAIN=false
+HAS_SECRET_TOOL=false
+HAS_GUM=false
+
+# 检测操作系统和可用工具
+init_platform() {
+    # 检测操作系统
+    case "$OSTYPE" in
+        darwin*)    OS_TYPE="macos" ;;
+        linux*)     OS_TYPE="linux" ;;
+        *)          OS_TYPE="unknown" ;;
+    esac
+
+    # 检测工具可用性
+    command -v jq >/dev/null 2>&1 && HAS_JQ=true
+
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        command -v security >/dev/null 2>&1 && HAS_KEYCHAIN=true
+    fi
+
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        command -v secret-tool >/dev/null 2>&1 && HAS_SECRET_TOOL=true
+    fi
+
+    command -v gum >/dev/null 2>&1 && HAS_GUM=true
+}
+
+# 初始化平台检测
+init_platform
 
 # ========== 公共函数 ==========
 
@@ -32,13 +69,471 @@ clean_token() {
     echo "$token"
 }
 
-# 验证 provider 是否有效
+# 验证 provider 是否有效（内置或自定义）
 validate_provider() {
     local provider="$1"
+
+    # 首先检查内置 provider
     case "$provider" in
         "glm"|"kimi"|"minimax") return 0 ;;
-        *) return 1 ;;
     esac
+
+    # 然后检查自定义 provider
+    if [[ -f "$PROVIDER_CONFIG_FILE" ]] && command -v jq >/dev/null 2>&1; then
+        if jq -e ".$provider" "$PROVIDER_CONFIG_FILE" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# ========== 配置检查和验证函数 ==========
+
+# 检查和验证 provider.json
+check_provider_config() {
+    # 如果文件不存在，自动创建
+    if [[ ! -f "$PROVIDER_CONFIG_FILE" ]]; then
+        echo -e "${YELLOW}检测到缺少 provider.json，正在自动初始化...${NC}"
+        echo ""
+        init_provider_config "true"  # 强制创建，不提示确认
+        return 0
+    fi
+
+    # 文件存在，检查格式
+    if ! command -v jq >/dev/null 2>&1; then
+        echo -e "${RED}错误: 需要安装 jq 来验证配置文件${NC}"
+        return 1
+    fi
+
+    # 验证 JSON 格式
+    local jq_result
+    jq_result=$(jq empty "$PROVIDER_CONFIG_FILE" 2>&1)
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}错误: provider.json 格式不正确${NC}"
+        echo ""
+        # 显示 jq 的错误信息（如果有）
+        if [[ -n "$jq_result" ]]; then
+            echo "错误详情: $jq_result"
+            echo ""
+        fi
+        echo "请检查文件: $PROVIDER_CONFIG_FILE"
+        echo ""
+        echo "可能的错误:"
+        echo "  - JSON 语法错误（缺少逗号、引号、花括号等）"
+        echo "  - 文件被意外修改"
+        echo ""
+        echo "解决方案:"
+        echo "  1. 运行: switch-claude init-provider-config 重新创建"
+        echo "  2. 或手动检查并修复 JSON 格式"
+        echo ""
+        return 1
+    fi
+
+    # 检查至少有一个 provider
+    local provider_count
+    provider_count=$(jq '. | keys | length' "$PROVIDER_CONFIG_FILE" 2>/dev/null)
+    if [[ $? -ne 0 ]] || [[ -z "$provider_count" ]] || [[ "$provider_count" -eq 0 ]]; then
+        echo -e "${RED}错误: provider.json 中没有配置任何 provider${NC}"
+        echo ""
+        echo "请检查文件: $PROVIDER_CONFIG_FILE"
+        echo ""
+        echo "解决方案:"
+        echo "  1. 运行: switch-claude init-provider-config 重新创建"
+        echo "  2. 或使用: switch-claude add-provider 添加 provider"
+        echo ""
+        return 1
+    fi
+
+    return 0
+}
+
+# ========== Provider 配置管理函数 ==========
+
+# 验证 provider 名称格式
+validate_provider_name() {
+    local name="$1"
+
+    # 检查是否为空
+    if [[ -z "$name" ]]; then
+        echo -e "${RED}错误: provider 名称不能为空${NC}"
+        return 1
+    fi
+
+    # 检查长度（建议 1-30 字符）
+    if [[ ${#name} -gt 30 ]]; then
+        echo -e "${RED}错误: provider 名称不能超过 30 个字符${NC}"
+        return 1
+    fi
+
+    # 验证格式：英文大小写字母和数字
+    if ! [[ "$name" =~ ^[a-zA-Z0-9]+$ ]]; then
+        echo -e "${RED}错误: provider 名称只能包含英文字母和数字${NC}"
+        echo "示例: MyProvider123, customAPI, provider2024"
+        return 1
+    fi
+
+    # 检查是否与内置 provider 冲突
+    case "$name" in
+        "glm"|"kimi"|"minimax")
+            echo -e "${YELLOW}警告: '$name' 是内置 provider，建议使用其他名称${NC}"
+            read -p "确定要继续吗？(y/n): " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                return 1
+            fi
+            ;;
+    esac
+
+    return 0
+}
+
+# 验证环境变量配置 JSON
+validate_env_config() {
+    local env_config="$1"
+
+    # 检查是否为空
+    if [[ -z "$env_config" ]]; then
+        echo -e "${RED}错误: 环境变量配置不能为空${NC}"
+        return 1
+    fi
+
+    # 使用 jq 验证 JSON 格式
+    if command -v jq >/dev/null 2>&1; then
+        local temp_file=$(mktemp)
+        echo "$env_config" > "$temp_file"
+
+        if ! jq empty "$temp_file" 2>/dev/null; then
+            echo -e "${RED}错误: 环境变量配置不是有效的 JSON 格式${NC}"
+            echo ""
+            echo "示例格式:"
+            echo '{'
+            echo '  "ANTHROPIC_AUTH_TOKEN": "",'
+            echo '  "ANTHROPIC_BASE_URL": "https://api.custom.com/anthropic",'
+            echo '  "ANTHROPIC_MODEL": "custom-model"'
+            echo '}'
+            rm -f "$temp_file"
+            return 1
+        fi
+
+        # 检查必需字段
+        local base_url=$(jq -r '.ANTHROPIC_BASE_URL // empty' "$temp_file")
+        if [[ -z "$base_url" ]]; then
+            echo -e "${RED}错误: 必须包含 ANTHROPIC_BASE_URL 字段${NC}"
+            rm -f "$temp_file"
+            return 1
+        fi
+
+        # 检查至少一个模型字段
+        local has_model=false
+        for field in "ANTHROPIC_MODEL" "ANTHROPIC_DEFAULT_HAIKU_MODEL" \
+                     "ANTHROPIC_DEFAULT_SONNET_MODEL" "ANTHROPIC_DEFAULT_OPUS_MODEL" \
+                     "ANTHROPIC_SMALL_FAST_MODEL"; do
+            if jq -e ".$field" "$temp_file" >/dev/null 2>&1; then
+                has_model=true
+                break
+            fi
+        done
+
+        if [[ "$has_model" != "true" ]]; then
+            echo -e "${RED}错误: 至少需要配置一个模型字段${NC}"
+            echo "可选的模型字段:"
+            echo "  - ANTHROPIC_MODEL"
+            echo "  - ANTHROPIC_DEFAULT_HAIKU_MODEL"
+            echo "  - ANTHROPIC_DEFAULT_SONNET_MODEL"
+            echo "  - ANTHROPIC_DEFAULT_OPUS_MODEL"
+            echo "  - ANTHROPIC_SMALL_FAST_MODEL"
+            rm -f "$temp_file"
+            return 1
+        fi
+
+        rm -f "$temp_file"
+        return 0
+    else
+        echo -e "${RED}错误: 需要安装 jq 来验证 JSON${NC}"
+        return 1
+    fi
+}
+
+# 读取 provider 配置
+read_provider_config() {
+    local provider="$1"
+
+    if [[ ! -f "$PROVIDER_CONFIG_FILE" ]]; then
+        echo -e "${RED}错误: provider 配置文件不存在: $PROVIDER_CONFIG_FILE${NC}" >&2
+        echo "" >&2
+        echo "请使用以下命令创建默认配置:" >&2
+        echo "  switch-claude init-provider-config" >&2
+        return 1
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        jq -c ".$provider" "$PROVIDER_CONFIG_FILE" 2>/dev/null
+    else
+        echo -e "${RED}错误: 需要安装 jq 来处理 JSON 配置文件${NC}" >&2
+        return 1
+    fi
+}
+
+# 创建默认 provider.json
+init_provider_config() {
+    local force="${1:-false}"  # 是否强制重新创建（跳过确认）
+
+    ensure_token_dir
+
+    if [[ -f "$PROVIDER_CONFIG_FILE" && "$force" != "true" ]]; then
+        echo -e "${YELLOW}provider.json 已存在${NC}"
+        read -p "是否要重新创建？(会覆盖现有配置) (y/n): " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "已取消"
+            return 0
+        fi
+    fi
+
+    cat > "$PROVIDER_CONFIG_FILE" << 'EOF'
+{
+  "glm": {
+    "ANTHROPIC_AUTH_TOKEN": "",
+    "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+    "API_TIMEOUT_MS": "3000000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-4.6",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-4.6"
+  },
+  "kimi": {
+    "ANTHROPIC_AUTH_TOKEN": "",
+    "ANTHROPIC_BASE_URL": "https://api.moonshot.cn/anthropic",
+    "ANTHROPIC_MODEL": "kimi-k2-turbo-preview",
+    "ANTHROPIC_SMALL_FAST_MODEL": "kimi-k2-turbo-preview"
+  },
+  "minimax": {
+    "ANTHROPIC_AUTH_TOKEN": "",
+    "ANTHROPIC_BASE_URL": "https://api.minimaxi.com/anthropic",
+    "API_TIMEOUT_MS": "3000000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ANTHROPIC_MODEL": "MiniMax-M2",
+    "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2"
+  }
+}
+EOF
+
+    echo -e "${GREEN}已创建默认 provider.json: $PROVIDER_CONFIG_FILE${NC}"
+}
+
+# 显示 provider 配置
+show_provider_config() {
+    if [[ ! -f "$PROVIDER_CONFIG_FILE" ]]; then
+        echo -e "${YELLOW}provider.json 不存在${NC}"
+        echo "请使用以下命令创建:"
+        echo "  switch-claude init-provider-config"
+        return 0
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        echo -e "${BLUE}Provider 配置:${NC}"
+        echo ""
+
+        # 脱敏显示所有 provider
+        jq -r '
+            to_entries[] |
+            "[\(.key)]" +
+            (.value | to_entries | map(select(.key == "ANTHROPIC_AUTH_TOKEN") | .value) |
+                if .[0] != "" then
+                    " Token: " + .[0][0:10] + "..." + .[0][-4:]
+                else
+                    " Token: (未设置)"
+                end
+            ) +
+            "\n  Base URL: " + (.value.ANTHROPIC_BASE_URL // "未设置")
+        ' "$PROVIDER_CONFIG_FILE" 2>/dev/null
+
+        echo ""
+        echo -e "${YELLOW}可用的模型字段:${NC}"
+        jq -r '
+            to_entries[0].value |
+            to_entries |
+            map(select(.key | startswith("ANTHROPIC") and contains("MODEL"))) |
+            map("  - " + .key) |
+            .[]
+        ' "$PROVIDER_CONFIG_FILE" 2>/dev/null
+    else
+        echo -e "${YELLOW}请安装 jq 以获得更好的显示效果${NC}"
+        echo "文件位置: $PROVIDER_CONFIG_FILE"
+    fi
+}
+
+# 添加新的 provider
+add_provider() {
+    if [[ $# -ne 2 ]]; then
+        echo -e "${RED}错误: add-provider 需要 2 个参数${NC}"
+        echo "用法: switch-claude add-provider <provider_name> <env_config_json>"
+        return 1
+    fi
+
+    local provider_name="$1"
+    local env_config_json="$2"
+
+    # 1. 验证 provider 名称
+    if ! validate_provider_name "$provider_name"; then
+        return 1
+    fi
+
+    # 2. 验证环境变量 JSON 格式
+    if ! validate_env_config "$env_config_json"; then
+        return 1
+    fi
+
+    # 3. 写入到 provider.json
+    local temp_file=$(mktemp)
+    if command -v jq >/dev/null 2>&1; then
+        if [[ -f "$PROVIDER_CONFIG_FILE" ]]; then
+            # 更新现有文件
+            jq --arg name "$provider_name" --argjson env "$env_config_json" \
+               '.[$name] = $env' "$PROVIDER_CONFIG_FILE" > "$temp_file"
+        else
+            # 创建新文件
+            echo "{}" | jq --arg name "$provider_name" --argjson env "$env_config_json" \
+               '. + {($name): $env}' > "$temp_file"
+        fi
+
+        if [[ $? -eq 0 ]]; then
+            mv "$temp_file" "$PROVIDER_CONFIG_FILE"
+            echo -e "${GREEN}已成功添加 provider: $provider_name${NC}"
+        else
+            echo -e "${RED}添加 provider 失败${NC}"
+            rm -f "$temp_file"
+            return 1
+        fi
+    else
+        echo -e "${RED}错误: 需要安装 jq${NC}"
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
+# 设置 token
+set_token() {
+    local provider="$1"
+    local token="$2"
+
+    if [[ -z "$provider" || -z "$token" ]]; then
+        echo -e "${RED}错误: 请提供 provider 和 token${NC}"
+        echo "用法: switch-claude set-token <provider> <token>"
+        return 1
+    fi
+
+    # 验证 provider 是否存在
+    if ! validate_provider "$provider"; then
+        echo -e "${RED}错误: provider '$provider' 不存在${NC}"
+        list_providers
+        return 1
+    fi
+
+    # 清理 token
+    token=$(clean_token "$token")
+
+    # 更新 provider.json
+    local temp_file=$(mktemp)
+    if command -v jq >/dev/null 2>&1; then
+        jq --arg provider "$provider" --arg token "$token" \
+           '.[$provider].ANTHROPIC_AUTH_TOKEN = $token' \
+           "$PROVIDER_CONFIG_FILE" > "$temp_file"
+
+        if [[ $? -eq 0 ]]; then
+            mv "$temp_file" "$PROVIDER_CONFIG_FILE"
+            echo -e "${GREEN}已为 $provider 设置 token${NC}"
+        else
+            echo -e "${RED}设置 token 失败${NC}"
+            rm -f "$temp_file"
+            return 1
+        fi
+    else
+        echo -e "${RED}错误: 需要安装 jq${NC}"
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
+# 删除自定义 provider
+remove_provider() {
+    local provider="$1"
+
+    if [[ -z "$provider" ]]; then
+        echo -e "${RED}错误: 请提供 provider 名称${NC}"
+        echo "用法: switch-claude remove-provider <provider>"
+        return 1
+    fi
+
+    # 不能删除内置 provider
+    case "$provider" in
+        "glm"|"kimi"|"minimax")
+            echo -e "${RED}错误: 不能删除内置 provider: $provider${NC}"
+            return 1
+            ;;
+    esac
+
+    if [[ ! -f "$PROVIDER_CONFIG_FILE" ]]; then
+        echo -e "${YELLOW}provider.json 不存在${NC}"
+        return 1
+    fi
+
+    # 检查 provider 是否存在
+    if ! validate_provider "$provider"; then
+        echo -e "${RED}错误: provider '$provider' 不存在${NC}"
+        return 1
+    fi
+
+    # 确认删除
+    read -p "确定要删除 provider '$provider' 吗？(y/n): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "已取消"
+        return 0
+    fi
+
+    # 删除 provider
+    local temp_file=$(mktemp)
+    if command -v jq >/dev/null 2>&1; then
+        jq "del(.$provider)" "$PROVIDER_CONFIG_FILE" > "$temp_file"
+
+        if [[ $? -eq 0 ]]; then
+            mv "$temp_file" "$PROVIDER_CONFIG_FILE"
+            echo -e "${GREEN}已删除 provider: $provider${NC}"
+        else
+            echo -e "${RED}删除 provider 失败${NC}"
+            rm -f "$temp_file"
+            return 1
+        fi
+    else
+        echo -e "${RED}错误: 需要安装 jq${NC}"
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
+# 列出所有 provider
+list_providers() {
+    if [[ ! -f "$PROVIDER_CONFIG_FILE" ]]; then
+        echo -e "${YELLOW}没有找到 provider.json${NC}"
+        return
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        echo "可用的 provider:"
+        jq -r 'keys[]' "$PROVIDER_CONFIG_FILE" 2>/dev/null | while read -r p; do
+            # 检查是否为内置 provider
+            case "$p" in
+                "glm"|"kimi"|"minimax")
+                    echo "  - $p (内置)"
+                    ;;
+                *)
+                    echo "  - $p (自定义)"
+                    ;;
+            esac
+        done
+    fi
 }
 
 # 提示用户选择保存位置
@@ -157,17 +652,10 @@ prompt_for_token() {
 read_token() {
     local provider="$1"
 
-    # 优先从 Keychain 读取
+    # 1. 优先从 Keychain 读取
     local token=$(security find-generic-password -a "$USER" -s "switch-claude-$provider" -w 2>/dev/null)
 
-    # 如果 Keychain 没有，从文件读取
-    if [[ -z "$token" && -f "$TOKENS_FILE" ]]; then
-        if command -v jq >/dev/null 2>&1; then
-            token=$(jq -r ".$provider // empty" "$TOKENS_FILE" 2>/dev/null)
-        fi
-    fi
-
-    # 如果还是没有，从环境变量读取
+    # 2. 如果 Keychain 没有，从环境变量读取
     if [[ -z "$token" ]]; then
         case "$provider" in
             "glm") token="$GLM_TOKEN" ;;
@@ -176,7 +664,14 @@ read_token() {
         esac
     fi
 
-    # 如果所有方式都失败，提示用户输入
+    # 3. 如果环境变量也没有，从 provider.json 读取
+    if [[ -z "$token" && -f "$PROVIDER_CONFIG_FILE" ]]; then
+        if command -v jq >/dev/null 2>&1; then
+            token=$(jq -r ".$provider.ANTHROPIC_AUTH_TOKEN // empty" "$PROVIDER_CONFIG_FILE" 2>/dev/null)
+        fi
+    fi
+
+    # 4. 如果所有方式都失败，提示用户输入
     if [[ -z "$token" ]]; then
         token=$(prompt_for_token "$provider")
     fi
@@ -185,48 +680,16 @@ read_token() {
     clean_token "$token"
 }
 
-# 设置 token 到文件
-set_token() {
-    local provider="$1"
-    local token="$2"
-
-    if [[ -z "$provider" || -z "$token" ]]; then
-        echo -e "${RED}错误: 请提供 provider 和 token${NC}"
-        return 1
-    fi
-
-    if ! validate_provider "$provider"; then
-        echo -e "${RED}错误: 不支持的 provider '$provider'${NC}"
-        echo "支持的 provider: glm, kimi, minimax"
-        return 1
-    fi
-
-    # 清理 token
-    token=$(clean_token "$token")
-
-    create_tokens_file
-
-    if command -v jq >/dev/null 2>&1; then
-        local temp_file=$(mktemp)
-        jq --arg provider "$provider" --arg token "$token" '.[$provider] = $token' "$TOKENS_FILE" > "$temp_file"
-        if [[ $? -eq 0 ]]; then
-            mv "$temp_file" "$TOKENS_FILE"
-            chmod 600 "$TOKENS_FILE"
-        else
-            echo -e "${RED}设置 token 失败${NC}"
-            rm -f "$temp_file"
-            return 1
-        fi
-    else
-        echo -e "${RED}错误: 需要安装 jq 来处理 JSON 配置文件${NC}"
-        return 1
-    fi
-}
-
 # 设置 token 到 Keychain
 set_token_keychain() {
     local provider="$1"
     local token="$2"
+
+    # 检查系统是否支持 Keychain
+    if ! is_command_available "set-keychain"; then
+        show_os_specific_error "keychain" "set-keychain"
+        return 1
+    fi
 
     if [[ -z "$provider" || -z "$token" ]]; then
         echo -e "${RED}错误: 请提供 provider 和 token${NC}"
@@ -242,10 +705,10 @@ set_token_keychain() {
     token=$(clean_token "$token")
 
     # 删除现有的（如果存在）
-    security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
+    security delete-generic-password -a "$USER" -s "switch-claude-$provider" >/dev/null 2>&1
 
     # 添加新的
-    security add-generic-password -a "$USER" -s "switch-claude-$provider" -w "$token" 2>/dev/null
+    security add-generic-password -a "$USER" -s "switch-claude-$provider" -w "$token" >/dev/null 2>&1
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}存储到 Keychain 失败${NC}"
         return 1
@@ -255,6 +718,12 @@ set_token_keychain() {
 # 清空 Keychain 中的 token
 clear_token_keychain() {
     local provider="$1"
+
+    # 检查系统是否支持 Keychain
+    if ! is_command_available "clear-keychain"; then
+        show_os_specific_error "keychain" "clear-keychain"
+        return 1
+    fi
 
     if [[ -z "$provider" ]]; then
         echo -e "${RED}错误: 请提供 provider${NC}"
@@ -268,7 +737,7 @@ clear_token_keychain() {
     fi
 
     # 从 Keychain 删除
-    security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
+    security delete-generic-password -a "$USER" -s "switch-claude-$provider" >/dev/null 2>&1
     if [[ $? -eq 0 ]]; then
         echo -e "${GREEN}已从 Keychain 中清空 $provider token${NC}"
     else
@@ -278,9 +747,15 @@ clear_token_keychain() {
 
 # 清空所有 Keychain 中的 tokens
 clear_all_tokens_keychain() {
+    # 检查系统是否支持 Keychain
+    if ! is_command_available "clear-all-keychains"; then
+        show_os_specific_error "keychain" "clear-all-keychains"
+        return 1
+    fi
+
     local count=0
     for provider in glm kimi minimax; do
-        security delete-generic-password -a "$USER" -s "switch-claude-$provider" 2>/dev/null
+        security delete-generic-password -a "$USER" -s "switch-claude-$provider" >/dev/null 2>&1
         if [[ $? -eq 0 ]]; then
             count=$((count + 1))
         fi
@@ -290,37 +765,6 @@ clear_all_tokens_keychain() {
         echo -e "${GREEN}已从 Keychain 中清空 $count 个 token${NC}"
     else
         echo -e "${YELLOW}Keychain 中没有找到任何 token${NC}"
-    fi
-}
-
-# 显示 token 状态
-show_token_status() {
-    local provider="$1"
-
-    if [[ -n "$provider" ]]; then
-        # 显示特定 provider 的 token
-        local token=$(read_token "$provider")
-        if [[ -n "$token" ]]; then
-            echo -e "${GREEN}$provider token: ${token:0:10}...${token: -4}${NC}"
-        else
-            echo -e "${YELLOW}$provider token: 未设置${NC}"
-        fi
-    else
-        # 显示所有 provider 的 token 状态
-        echo -e "${BLUE}Token 状态:${NC}"
-        for p in glm kimi minimax; do
-            local token=$(read_token "$p")
-            if [[ -n "$token" ]]; then
-                echo -e "  ${GREEN}$p: ${token:0:10}...${token: -4}${NC}"
-            else
-                echo -e "  ${YELLOW}$p: 未设置${NC}"
-            fi
-        done
-        echo ""
-        echo -e "${YELLOW}设置 token 的方法:${NC}"
-        echo "  switch-claude set-token <provider> <token>      # 存储到文件"
-        echo "  switch-claude set-keychain <provider> <token>   # 存储到 Keychain (推荐)"
-        echo "  export <PROVIDER>_TOKEN=<token>                 # 设置环境变量"
     fi
 }
 
@@ -461,26 +905,22 @@ switch_to_glm() {
     local launch_claude="$1"
     shift  # 移除第一个参数，剩余参数传递给 claude
 
+    # 从 provider.json 读取配置
+    local provider_config=$(read_provider_config "glm" 2>/dev/null)
+    if [[ $? -ne 0 ]] || [[ -z "$provider_config" ]]; then
+        echo -e "${RED}错误: 无法读取 GLM 配置${NC}"
+        echo ""
+        echo "请确保已运行: switch-claude init-provider-config"
+        return 1
+    fi
+
+    # 读取 token（优先级：Keychain > env > provider.json > prompt）
     local token=$(read_token "glm")
 
-    # 使用 jq 构建 JSON 配置
-    local env_config=$(jq -n \
+    # 解析配置并替换 token
+    local env_config=$(echo "$provider_config" | jq \
         --arg token "$token" \
-        --arg base_url "https://open.bigmodel.cn/api/anthropic" \
-        --arg timeout "3000000" \
-        --arg disable_traffic "1" \
-        --arg haiku_model "glm-4.5-air" \
-        --arg sonnet_model "glm-4.6" \
-        --arg opus_model "glm-4.6" \
-        '{
-            ANTHROPIC_AUTH_TOKEN: $token,
-            ANTHROPIC_BASE_URL: $base_url,
-            API_TIMEOUT_MS: $timeout,
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: $disable_traffic,
-            ANTHROPIC_DEFAULT_HAIKU_MODEL: $haiku_model,
-            ANTHROPIC_DEFAULT_SONNET_MODEL: $sonnet_model,
-            ANTHROPIC_DEFAULT_OPUS_MODEL: $opus_model
-        }')
+        '.ANTHROPIC_AUTH_TOKEN = $token')
 
     update_config "GLM" "$env_config" "$launch_claude" "$@"
 }
@@ -490,20 +930,22 @@ switch_to_kimi() {
     local launch_claude="$1"
     shift  # 移除第一个参数，剩余参数传递给 claude
 
+    # 从 provider.json 读取配置
+    local provider_config=$(read_provider_config "kimi" 2>/dev/null)
+    if [[ $? -ne 0 ]] || [[ -z "$provider_config" ]]; then
+        echo -e "${RED}错误: 无法读取 Kimi 配置${NC}"
+        echo ""
+        echo "请确保已运行: switch-claude init-provider-config"
+        return 1
+    fi
+
+    # 读取 token（优先级：Keychain > env > provider.json > prompt）
     local token=$(read_token "kimi")
 
-    # 使用 jq 构建 JSON 配置
-    local env_config=$(jq -n \
+    # 解析配置并替换 token
+    local env_config=$(echo "$provider_config" | jq \
         --arg token "$token" \
-        --arg base_url "https://api.moonshot.cn/anthropic" \
-        --arg model "kimi-k2-turbo-preview" \
-        --arg small_model "kimi-k2-turbo-preview" \
-        '{
-            ANTHROPIC_BASE_URL: $base_url,
-            ANTHROPIC_AUTH_TOKEN: $token,
-            ANTHROPIC_MODEL: $model,
-            ANTHROPIC_SMALL_FAST_MODEL: $small_model
-        }')
+        '.ANTHROPIC_AUTH_TOKEN = $token')
 
     update_config "Kimi" "$env_config" "$launch_claude" "$@"
 }
@@ -513,32 +955,65 @@ switch_to_minimax() {
     local launch_claude="$1"
     shift  # 移除第一个参数，剩余参数传递给 claude
 
+    # 从 provider.json 读取配置
+    local provider_config=$(read_provider_config "minimax" 2>/dev/null)
+    if [[ $? -ne 0 ]] || [[ -z "$provider_config" ]]; then
+        echo -e "${RED}错误: 无法读取 Minimax 配置${NC}"
+        echo ""
+        echo "请确保已运行: switch-claude init-provider-config"
+        return 1
+    fi
+
+    # 读取 token（优先级：Keychain > env > provider.json > prompt）
     local token=$(read_token "minimax")
 
-    # 使用 jq 构建 JSON 配置
-    local env_config=$(jq -n \
+    # 解析配置并替换 token
+    local env_config=$(echo "$provider_config" | jq \
         --arg token "$token" \
-        --arg base_url "https://api.minimaxi.com/anthropic" \
-        --arg timeout "3000000" \
-        --arg disable_traffic "1" \
-        --arg model "MiniMax-M2" \
-        --arg small_model "MiniMax-M2" \
-        --arg sonnet_model "MiniMax-M2" \
-        --arg opus_model "MiniMax-M2" \
-        --arg haiku_model "MiniMax-M2" \
-        '{
-            ANTHROPIC_BASE_URL: $base_url,
-            ANTHROPIC_AUTH_TOKEN: $token,
-            API_TIMEOUT_MS: $timeout,
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: $disable_traffic,
-            ANTHROPIC_MODEL: $model,
-            ANTHROPIC_SMALL_FAST_MODEL: $small_model,
-            ANTHROPIC_DEFAULT_SONNET_MODEL: $sonnet_model,
-            ANTHROPIC_DEFAULT_OPUS_MODEL: $opus_model,
-            ANTHROPIC_DEFAULT_HAIKU_MODEL: $haiku_model
-        }')
+        '.ANTHROPIC_AUTH_TOKEN = $token')
 
     update_config "Minimax" "$env_config" "$launch_claude" "$@"
+}
+
+# 通用 provider 切换函数（用于自定义 provider）
+switch_to_provider() {
+    local provider="$1"
+    local launch_claude="$2"
+    shift 2  # 移除前两个参数，剩余参数传递给 claude
+
+    # 检查 provider 是否有效
+    if ! validate_provider "$provider"; then
+        echo -e "${RED}错误: 未知的 provider '$provider'${NC}"
+        echo ""
+        list_providers
+        return 1
+    fi
+
+    # 检查是否为内置 provider（内置 provider 有专门的函数）
+    case "$provider" in
+        "glm"|"kimi"|"minimax")
+            echo -e "${YELLOW}警告: 内置 provider '$provider' 建议使用专用命令${NC}"
+            ;;
+    esac
+
+    # 从 provider.json 读取配置
+    local provider_config=$(read_provider_config "$provider" 2>/dev/null)
+    if [[ $? -ne 0 ]] || [[ -z "$provider_config" ]]; then
+        echo -e "${RED}错误: 无法读取 $provider 配置${NC}"
+        echo ""
+        echo "请确保已运行: switch-claude init-provider-config"
+        return 1
+    fi
+
+    # 读取 token（优先级：Keychain > env > provider.json > prompt）
+    local token=$(read_token "$provider")
+
+    # 解析配置并替换 token
+    local env_config=$(echo "$provider_config" | jq \
+        --arg token "$token" \
+        '.ANTHROPIC_AUTH_TOKEN = $token')
+
+    update_config "$provider" "$env_config" "$launch_claude" "$@"
 }
 
 # 清空配置
@@ -644,60 +1119,203 @@ check_dependencies() {
     return $has_error
 }
 
-# 显示使用帮助
+# ========== 动态帮助信息生成 ==========
+
+# 显示 macOS 专用帮助
+show_macos_help() {
+    cat << 'EOF'
+Claude Code 模型切换脚本 (macOS)
+
+用法:
+  switch-claude [选项] [--launch]
+
+模型切换选项:
+  glm                    切换到 GLM 模型
+  kimi                   切换到 Kimi 模型
+  minimax                切换到 Minimax 模型
+  <custom-provider>      切换到自定义 provider
+  current                显示当前配置
+  clear                  清空所有配置（需要确认）
+
+Provider 管理选项:
+  init-provider-config                初始化默认 provider.json
+  show-provider-config                显示所有 provider 配置
+  list-providers                      列出所有可用的 provider
+  add-provider <name> <config>        添加新的自定义 provider
+  set-token <provider> <token>        为 provider 设置 token
+  remove-provider <provider>          删除自定义 provider
+
+Token 管理选项:
+  set-token <provider> <token>        设置 token 到 provider.json (推荐)
+  set-keychain <provider> <token>     设置 token 到 Keychain (最安全) ⭐
+  clear-keychain <provider>           清空 Keychain 中特定 provider 的 token
+  clear-all-keychains                 清空 Keychain 中的所有 switch-claude 创建的 tokens
+
+其他选项:
+  --system-info     显示系统信息
+  --launch          切换后自动启动 Claude Code
+  help              显示此帮助信息
+
+说明:
+  - Token 优先级: Keychain > 环境变量 > provider.json
+  - 每次切换前会自动备份当前配置
+  - Provider 配置文件位置: ~/.config/switch-claude/provider.json
+  - 推荐使用 Keychain 存储 token 以提高安全性
+EOF
+}
+
+# 显示 Linux 专用帮助
+show_linux_help() {
+    cat << 'EOF'
+Claude Code 模型切换脚本 (Linux)
+
+用法:
+  switch-claude [选项] [--launch]
+
+模型切换选项:
+  glm                    切换到 GLM 模型
+  kimi                   切换到 Kimi 模型
+  minimax                切换到 Minimax 模型
+  <custom-provider>      切换到自定义 provider
+  current                显示当前配置
+  clear                  清空所有配置（需要确认）
+
+Provider 管理选项:
+  init-provider-config                初始化默认 provider.json
+  show-provider-config                显示所有 provider 配置
+  list-providers                      列出所有可用的 provider
+  add-provider <name> <config>        添加新的自定义 provider
+  set-token <provider> <token>        为 provider 设置 token (推荐) ⭐
+  remove-provider <provider>          删除自定义 provider
+
+Token 管理选项:
+  set-token <provider> <token>        设置 token 到 provider.json (推荐)
+
+可选 (GNOME Keyring):
+  - 如果已安装 GNOME Keyring: sudo apt install gnome-keyring libsecret-tools
+  - 可以使用 secret-tool 获得更好的安全性
+
+其他选项:
+  --system-info     显示系统信息
+  --launch          切换后自动启动 Claude Code
+  help              显示此帮助信息
+
+说明:
+  - Ubuntu/Debian 等 Linux 系统不支持 macOS Keychain
+  - 推荐使用 'set-token' 命令存储到配置文件
+  - Token 优先级: 环境变量 > provider.json > 提示输入
+  - 每次切换前会自动备份当前配置
+  - Provider 配置文件位置: ~/.config/switch-claude/provider.json
+EOF
+}
+
+# 生成动态帮助
+generate_dynamic_help() {
+    case "$OS_TYPE" in
+        "macos")
+            show_macos_help
+            ;;
+        "linux")
+            show_linux_help
+            ;;
+        *)
+            # 通用帮助
+            echo -e "${BLUE}Claude Code 模型切换脚本${NC}"
+            echo ""
+            echo "用法:"
+            echo "  switch-claude [选项] [--launch]"
+            echo ""
+            echo "模型切换选项:"
+            echo "  glm                    切换到 GLM 模型"
+            echo "  kimi                   切换到 Kimi 模型"
+            echo "  minimax                切换到 Minimax 模型"
+            echo "  <custom-provider>      切换到自定义 provider"
+            echo "  current                显示当前配置"
+            echo "  clear                  清空所有配置"
+            echo ""
+            echo "Provider 管理选项:"
+            echo "  init-provider-config   初始化默认 provider.json"
+            echo "  show-provider-config   显示所有 provider 配置"
+            echo "  list-providers         列出所有可用的 provider"
+            echo "  add-provider <name> <config>   添加新的自定义 provider"
+            echo "  set-token <provider> <token>   为 provider 设置 token"
+            echo "  remove-provider <provider>     删除自定义 provider"
+            echo ""
+            echo "其他选项:"
+            echo "  --system-info  显示系统信息"
+            echo "  --launch       切换后自动启动 Claude Code"
+            echo "  help           显示此帮助信息"
+            echo ""
+            echo "说明:"
+            echo "  - 当前系统: $OS_TYPE"
+            echo "  - 某些功能可能不可用"
+            echo "  - 使用 --system-info 查看详细信息"
+            ;;
+    esac
+}
+
+# 显示使用帮助（动态生成）
 show_help() {
-    echo -e "${BLUE}Claude Code 模型切换脚本${NC}"
+    generate_dynamic_help
+}
+
+# ========== 命令可用性检查 ==========
+
+# 检查命令在当前系统是否可用
+is_command_available() {
+    local cmd="$1"
+
+    case "$cmd" in
+        "set-keychain"|"clear-keychain"|"clear-all-keychains")
+            # Keychain 仅在 macOS 可用
+            [[ "$OS_TYPE" == "macos" && "$HAS_KEYCHAIN" == "true" ]]
+            ;;
+        "set-secret"|"get-secret"|"delete-secret")
+            # secret-tool 仅在 Linux 且安装了 GNOME Keyring 时可用
+            [[ "$OS_TYPE" == "linux" && "$HAS_SECRET_TOOL" == "true" ]]
+            ;;
+        *)
+            # 其他命令在所有系统都可用
+            return 0
+            ;;
+    esac
+}
+
+# 显示系统特定错误信息
+show_os_specific_error() {
+    local feature="$1"
+    local feature_name="${2:-$feature}"
+
+    echo -e "${RED}错误: '$feature_name' 在当前系统不可用${NC}"
     echo ""
-    echo "用法:"
-    echo "  switch-claude [选项] [--launch]"
-    echo ""
-    echo "模型切换选项:"
-    echo "  glm      切换到 GLM 模型"
-    echo "  kimi     切换到 Kimi 模型"
-    echo "  minimax  切换到 Minimax 模型"
-    echo "  current  显示当前配置"
-    echo "  clear    清空所有配置（需要确认）"
-    echo ""
-    echo "Token 管理选项:"
-    echo "  set-token <provider> <token>           设置 token 到配置文件"
-    echo "  set-keychain <provider> <token>        设置 token 到 Keychain (推荐)"
-    echo "  show-tokens                            显示所有 token 状态"
-    echo "  show-token <provider>                  显示特定 provider 的 token 状态"
-    echo "  clear-keychain <provider>              清空 Keychain 中特定 provider 的 token"
-    echo "  clear-all-keychains                    清空 Keychain 中的所有 switch-claude 创建的 tokens"
-    echo ""
-    echo "其他选项:"
-    echo "  help     显示此帮助信息"
-    echo ""
-    echo "参数:"
-    echo "  --launch  切换后自动启动 Claude Code"
-    echo ""
-    echo "模型切换示例:"
-    echo "  switch-claude glm                      # 切换到 GLM"
-    echo "  switch-claude kimi                     # 切换到 Kimi"
-    echo "  switch-claude minimax                  # 切换到 Minimax"
-    echo "  switch-claude glm --launch             # 切换到 GLM 并启动 Claude Code"
-    echo "  switch-claude kimi --launch 你好       # 切换到 Kimi 并启动 Claude Code，发送消息'你好'"
-    echo "  switch-claude minimax --launch 帮我写个Python脚本  # 切换到 Minimax 并启动 Claude Code，发送请求"
-    echo ""
-    echo "Token 管理示例:"
-    echo "  switch-claude set-token glm sk-xxx...            # 设置 GLM token 到文件"
-    echo "  switch-claude set-keychain kimi sk-yyy...        # 设置 Kimi token 到 Keychain"
-    echo "  switch-claude show-tokens                        # 显示所有 token 状态"
-    echo "  switch-claude show-token glm                     # 显示 GLM token 状态"
-    echo "  switch-claude clear-keychain kimi                # 清空 Keychain 中 Kimi token"
-    echo "  switch-claude clear-all-keychains                # 清空 Keychain 中的所有 switch-claude 创建的 tokens"
-    echo ""
-    echo -e "${YELLOW}说明:${NC}"
-    echo "  - 此脚本通过修改 ~/.claude/settings.json 文件来切换模型"
-    echo "  - Token 优先级: Keychain > 配置文件 > 环境变量"
-    echo "  - 每次切换前会自动备份当前配置"
-    echo "  - 需要安装 jq 工具来处理 JSON 配置文件"
-    echo "  - 使用 --launch 参数可在切换后自动启动 Claude Code"
-    echo "  - --launch 后的参数会直接传递给 claude 命令，就像直接运行 claude 一样"
-    echo "  - Token 配置文件位置: ~/.config/switch-claude/tokens.json"
-    echo "  - 推荐使用 Keychain 存储 token 以提高安全性"
-    echo "  - clear 命令会清空所有配置（包括 ~/.config/switch-claude 目录），需要用户确认"
+
+    case "$OS_TYPE" in
+        "macos")
+            if [[ "$feature" == "keychain" ]]; then
+                echo -e "${YELLOW}Keychain 是 macOS 的原生功能，但当前可能未正确配置${NC}"
+            fi
+            ;;
+        "linux")
+            case "$feature" in
+                "keychain")
+                    echo -e "${YELLOW}Keychain 是 macOS 专有功能，Linux 系统不支持${NC}"
+                    echo ""
+                    echo -e "${BLUE}替代方案:${NC}"
+                    echo "  1. 使用 'set-token' 命令将 token 存储到配置文件"
+                    echo "  2. 设置环境变量 (export GLM_TOKEN=your_token)"
+                    echo "  3. 安装 GNOME Keyring: sudo apt install gnome-keyring libsecret-tools"
+                    echo "     然后可以使用 'set-secret' 命令"
+                    ;;
+                *)
+                    echo -e "${YELLOW}此功能在 Linux 上不可用${NC}"
+                    ;;
+            esac
+            ;;
+        "windows")
+            echo -e "${YELLOW}Windows (WSL) 环境下某些功能可能受限${NC}"
+            echo -e "${BLUE}  建议在 WSL2 中运行${NC}"
+            ;;
+    esac
 }
 
 # 主函数
@@ -707,45 +1325,73 @@ main() {
         return 1
     fi
 
-    # Token 管理命令（不使用 --launch 参数）
+    # 检查和验证 provider 配置
+    if ! check_provider_config; then
+        return 1
+    fi
+
+    # Provider 管理命令（不使用 --launch 参数）
     case "${1:-}" in
-        "set-token"|"set-keychain"|"show-tokens"|"show-token"|"clear-keychain"|"clear-all-keychains")
+        "init-provider-config"|"show-provider-config"|"add-provider"|"set-token"|"remove-provider"|"list-providers")
             case "$1" in
+                "init-provider-config")
+                    init_provider_config
+                    ;;
+                "show-provider-config")
+                    show_provider_config
+                    ;;
+                "add-provider")
+                    if [[ $# -ne 3 ]]; then
+                        echo -e "${RED}错误: add-provider 需要 2 个参数${NC}"
+                        echo "用法: switch-claude add-provider <provider_name> <env_config_json>"
+                        echo ""
+                        echo "示例:"
+                        echo 'switch-claude add-provider MyProvider "{\"ANTHROPIC_AUTH_TOKEN\": \"\", \"ANTHROPIC_BASE_URL\": \"https://api.custom.com/anthropic\", \"ANTHROPIC_MODEL\": \"custom-model\"}"'
+                        return 1
+                    fi
+                    add_provider "$2" "$3"
+                    ;;
                 "set-token")
                     if [[ $# -ne 3 ]]; then
                         echo -e "${RED}错误: set-token 需要 2 个参数${NC}"
                         echo "用法: switch-claude set-token <provider> <token>"
-                        echo "支持的 provider: glm, kimi, minimax"
+                        echo "支持的 provider: 查看 'switch-claude list-providers'"
                         return 1
                     fi
                     set_token "$2" "$3"
                     ;;
+                "remove-provider")
+                    if [[ $# -ne 2 ]]; then
+                        echo -e "${RED}错误: remove-provider 需要 1 个参数${NC}"
+                        echo "用法: switch-claude remove-provider <provider>"
+                        return 1
+                    fi
+                    remove_provider "$2"
+                    ;;
+                "list-providers")
+                    list_providers
+                    ;;
+            esac
+            return $?
+            ;;
+
+        # Keychain 管理命令
+        "set-keychain"|"clear-keychain"|"clear-all-keychains")
+            case "$1" in
                 "set-keychain")
                     if [[ $# -ne 3 ]]; then
                         echo -e "${RED}错误: set-keychain 需要 2 个参数${NC}"
                         echo "用法: switch-claude set-keychain <provider> <token>"
-                        echo "支持的 provider: glm, kimi, minimax"
+                        echo "支持的 provider: 查看 'switch-claude list-providers'"
                         return 1
                     fi
                     set_token_keychain "$2" "$3"
-                    ;;
-                "show-tokens")
-                    show_token_status
-                    ;;
-                "show-token")
-                    if [[ $# -ne 2 ]]; then
-                        echo -e "${RED}错误: show-token 需要 1 个参数${NC}"
-                        echo "用法: switch-claude show-token <provider>"
-                        echo "支持的 provider: glm, kimi, minimax"
-                        return 1
-                    fi
-                    show_token_status "$2"
                     ;;
                 "clear-keychain")
                     if [[ $# -ne 2 ]]; then
                         echo -e "${RED}错误: clear-keychain 需要 1 个参数${NC}"
                         echo "用法: switch-claude clear-keychain <provider>"
-                        echo "支持的 provider: glm, kimi, minimax"
+                        echo "支持的 provider: 查看 'switch-claude list-providers'"
                         return 1
                     fi
                     clear_token_keychain "$2"
@@ -776,6 +1422,35 @@ main() {
         elif [[ "$arg" == "--launch" ]]; then
             launch_claude="true"
             found_launch=true
+        elif [[ "$arg" == "--system-info" ]]; then
+            # 显示系统信息
+            echo -e "${BLUE}系统信息:${NC}"
+            echo "  操作系统: $OS_TYPE"
+            echo "  jq: $HAS_JQ"
+            echo "  Keychain: $HAS_KEYCHAIN"
+            echo "  secret-tool: $HAS_SECRET_TOOL"
+            echo "  gum: $HAS_GUM"
+            echo ""
+            case "$OS_TYPE" in
+                "macos")
+                    if [[ "$HAS_KEYCHAIN" == "true" ]]; then
+                        echo -e "${GREEN}✓ macOS 完整功能可用 (Keychain)${NC}"
+                        echo -e "${BLUE}  建议使用 'set-keychain' 获得最高安全性${NC}"
+                    fi
+                    ;;
+                "linux")
+                    if [[ "$HAS_KEYCHAIN" == "false" ]]; then
+                        echo -e "${YELLOW}⚠ Linux 系统 (不支持 macOS Keychain)${NC}"
+                        echo -e "${BLUE}  建议方案:${NC}"
+                        echo -e "    1. 使用 'set-token' 存储到配置文件"
+                        echo -e "    2. 或安装 GNOME Keyring: sudo apt install gnome-keyring libsecret-tools"
+                    fi
+                    if [[ "$HAS_SECRET_TOOL" == "true" ]]; then
+                        echo -e "${GREEN}✓ GNOME Keyring 已安装，可使用 secret-tool${NC}"
+                    fi
+                    ;;
+            esac
+            return 0
         elif [[ -z "$model" ]]; then
             # 第一个非 --launch 参数是模型名
             model="$arg"
@@ -818,10 +1493,18 @@ main() {
             return 1
             ;;
         *)
-            echo -e "${RED}错误: 未知的选项 '$model'${NC}"
-            echo ""
-            show_help
-            return 1
+            # 尝试作为自定义 provider 处理
+            if validate_provider "$model"; then
+                switch_to_provider "$model" "$launch_claude" "${claude_args[@]}"
+                if [[ "$launch_claude" != "true" ]]; then
+                    show_current
+                fi
+            else
+                echo -e "${RED}错误: 未知的选项 '$model'${NC}"
+                echo ""
+                list_providers
+                return 1
+            fi
             ;;
     esac
 }
