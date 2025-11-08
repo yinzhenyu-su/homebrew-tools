@@ -340,7 +340,7 @@ generate_report() {
         </div>
         <div class="footer">
             <p>测试报告生成时间: <span class="timestamp">TIMESTAMP_VAR</span></p>
-            <p style="margin-top: 10px;">Switch Claude v1.0.3</p>
+            <p style="margin-top: 10px;">Switch Claude</p>
         </div>
     </div>
     <script>
