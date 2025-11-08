@@ -1,13 +1,12 @@
 class SwitchClaude < Formula
   desc "Claude Code 模型切换工具"
   homepage "https://github.com/yinzhenyu-su/homebrew-tools"
-  url "https://github.com/yinzhenyu-su/homebrew-tools/archive/v2.0.0.tar.gz"
-  version "2.0.0"
-  sha256 "cbf066e1a02c9774fb82941f4a3a6765bd4ef29e796da5a7f0c79e2bab22519f"
+  url "https://github.com/yinzhenyu-su/homebrew-tools/archive/v2.0.1.tar.gz"
+  version "2.0.1"
+  sha256 "746b17c08090a351f0d1eb97390c3c55f6fcbd601b812237d9fe84f6cb1a02e3"
   license "MIT"
 
   depends_on "jq"
-  depends_on "gum"
 
   def install
     # 安装脚本到 bin 目录
