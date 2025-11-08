@@ -7,6 +7,7 @@ class SwitchClaude < Formula
   license "MIT"
 
   depends_on "jq"
+  depends_on "gum"
 
   def install
     # 安装脚本到 bin 目录
