@@ -8,28 +8,6 @@ Claude Code 模型切换工具的 Homebrew 包集合。
 
 一个强大的 Claude Code 模型切换脚本，支持在 GLM、Kimi、Minimax 等模型之间快速切换。
 
-## 项目结构
-
-```text
-homebrew-tools/
-├── README.md                    # 项目主文档
-├── Formula/                     # Homebrew Formula 定义
-│   └── switch-claude.rb        # switch-claude 包定义
-├── scripts/                     # 主要脚本文件
-│   └── switch-claude.sh        # Claude Code 模型切换脚本
-├── docs/                        # 文档目录
-│   └── STRUCTURE.md            # 项目结构说明
-├── tests/                       # 测试文件
-│   ├── README.md               # 测试套件文档
-│   ├── run-all-tests.sh        # 测试套件主脚本
-│   ├── quick-test.sh           # 快速功能测试
-│   ├── test-errors.sh          # 错误处理测试
-│   ├── test-integration.sh     # 集成测试
-│   └── test-report.html        # 生成的HTML测试报告
-└── .github/                     # GitHub 配置
-    └── workflows/              # GitHub Actions 工作流
-```
-
 ## 📦 安装
 
 ```bash
@@ -73,10 +51,7 @@ switch-claude set-keychain kimi "your_kimi_token"
 switch-claude set-keychain minimax "your_minimax_token"
 ```
 
-**Token 存储方式优先级**：
-1. **Keychain** - 最安全，适合敏感信息
-2. **provider.json** - 推荐，管理更灵活
-3. **环境变量** - 适合临时使用
+脚本会按照下方“[🔐 Token 优先级](#-token-优先级)”章节所述的顺序查找凭证，若所有来源都为空会提示你在终端中输入 token。macOS 用户优先推荐 `set-keychain`，其它平台可使用 `set-token` 写入 `provider.json`，环境变量适合临时调试。
 
 ### 📝 Provider 配置管理
 
@@ -95,6 +70,8 @@ switch-claude show-provider-config
 # 为特定 provider 设置 token
 switch-claude set-token glm "your_token"
 ```
+
+首次执行 `switch-claude list-providers` 或任何依赖 provider 的命令时，脚本会自动初始化 `~/.config/switch-claude/provider.json` 并写入三个内置配置。`switch-claude init-provider-config` 可在确认后重新生成该文件，而 `show-provider-config` 会对 token 做脱敏处理，方便安全排查。
 
 ### 🔧 自定义 Provider
 
@@ -116,6 +93,7 @@ switch-claude MyAPI --launch
 ```
 
 **自定义 Provider 要求**：
+
 - Provider 名称只能包含英文字母和数字
 - 必须包含 `ANTHROPIC_BASE_URL` 字段
 - 至少需要配置一个模型字段（`ANTHROPIC_MODEL` 或 `ANTHROPIC_DEFAULT_*_MODEL`）
@@ -131,16 +109,6 @@ switch-claude --system-info
 switch-claude help
 ```
 
-**系统信息示例:**
-```
-系统信息:
-  操作系统: macos
-  jq: ✓ 已安装
-  Keychain: ✓ 可用
-  secret-tool: ✗ 不可用
-  gum: ✓ 已安装
-```
-
 ### 高级用法
 
 ```bash
@@ -154,6 +122,12 @@ switch-claude kimi --launch "你好，帮我写个Python脚本"
 switch-claude clear
 ```
 
+`--launch` 会在切换成功后调用 `claude` CLI；跟在 `--launch` 之后的任何文本都会作为一次性提示词转发给 Claude。
+
+### ⚠️ 配置清理
+
+`switch-claude clear` 会在交互确认后清空 `~/.claude/settings.json` 中的环境变量、删除整个 `~/.config/switch-claude/` 目录，并在 macOS 上移除以 `switch-claude-<provider>` 命名的 Keychain 条目；如果系统不支持 Keychain，会给出相应提示。安装了 [gum](https://github.com/charmbracelet/gum) 时将显示确认弹窗，否则使用终端输入 `yes` 确认。
+
 ### 别名命令
 
 ```bash
@@ -163,18 +137,15 @@ sc kimi                  # 等同于 switch-claude kimi
 
 ## ✨ 功能特性
 
-- ✅ **跨平台支持**: 自动检测 macOS/Linux/Windows，智能适配功能
-- ✅ **安全的 Token 管理**: 支持 Keychain、provider.json、环境变量三种方式
-- ✅ **多模型支持**: GLM、Kimi、Minimax 及自定义 provider
-- ✅ **Provider 配置**: 支持从 `provider.json` 文件读取配置，管理更灵活
-- ✅ **自定义 Provider**: 可添加任意自定义模型提供商
-- ✅ **配置备份**: 每次切换前自动备份
-- ✅ **快速启动**: 支持切换后直接启动 Claude Code
-- ✅ **别名支持**: `switch-claude`、`claude-switch`、`sc`
-- ✅ **动态帮助**: 根据操作系统显示平台特定帮助信息
-- ✅ **命令可用性检查**: 智能检测并提示平台不支持的功能
-- ✅ **详细帮助**: 完整的使用说明和示例
-- ✅ **简洁明了**: 精简命令，避免功能重复
+- ✅ **跨平台适配**: 自动识别 macOS/Linux，并输出对应的帮助与命令可用性提示。
+- ✅ **系统洞察**: `switch-claude help` 与 `--system-info` 动态展示依赖状态、Keychain/secret-tool 支持情况。
+- ✅ **多源 Token 管理**: 按 Keychain → 环境变量 → provider.json → 终端输入 的顺序查找，并对 `current` 输出的 token 自动脱敏。
+- ✅ **默认与自定义 Provider**: 首次运行自动生成默认配置，支持校验 JSON、批量添加/删除和安全确认。
+- ✅ **配置备份机制**: 切换前自动备份为 `~/.config/switch-claude/settings.json.backup.*`，方便手动回滚。
+- ✅ **Claude CLI 集成**: `--launch` 支持直接唤起 `claude` 命令并可附带一次性 prompt。
+- ✅ **交互式清理**: `clear` 命令在确认后清空配置目录并清理 macOS Keychain。
+- ✅ **丰富别名**: Homebrew 安装同时提供 `switch-claude`、`claude-switch` 与 `sc` 三个入口。
+- ✅ **可选美化交互**: 检测到 [gum](https://github.com/charmbracelet/gum) 时自动启用更友好的确认/提示界面。
 
 ## 🔧 支持的模型
 
@@ -191,17 +162,21 @@ sc kimi                  # 等同于 switch-claude kimi
 3. **Provider 配置文件** (`~/.config/switch-claude/provider.json`)
 4. **提示用户输入** (如果以上都未设置)
 
+当需要交互式输入 token 时，脚本会先询问是否保存到 Keychain（仅 macOS）或 `provider.json`，若拒绝则仅在本次切换中使用该 token。
+
 ## 📁 配置文件位置
 
 - **Claude Code 配置**: `~/.claude/settings.json`
 - **Provider 配置**: `~/.config/switch-claude/provider.json`
-- **Token 配置 (旧版兼容)**: `~/.config/switch-claude/tokens.json`
-- **配置备份**: `~/.claude/settings.json.backup.YYYYMMDD_HHMMSS`
+- **配置备份**: `~/.config/switch-claude/settings.json.backup.YYYYMMDD_HHMMSS`
+- **Keychain (macOS)**: `switch-claude-<provider>` 名称的钥匙串条目
+- **Token 配置 (旧版兼容)**: `~/.config/switch-claude/tokens.json`（现版本不会自动生成，仅保留向后兼容）
 
 ## 📋 依赖要求
 
-- [jq](https://stedolan.github.io/jq/) - JSON 处理工具（会自动安装）
-- [Claude Code](https://claude.ai/code) - 需要预先安装
+- [jq](https://stedolan.github.io/jq/) - 必需，Homebrew Formula 会自动安装；手动运行脚本前请确保 `jq` 可用。
+- [Claude Code CLI](https://claude.ai/code) - 需预先安装并确保 `claude` 命令在 `PATH` 中，否则 `--launch` 无法工作。
+- [gum](https://github.com/charmbracelet/gum) - 可选，提供更友好的交互提示；缺失时脚本会自动降级为 shell 提示。
 
 ## 🧪 测试
 
@@ -221,23 +196,21 @@ bash tests/test-errors.sh
 bash tests/test-integration.sh
 ```
 
-### 测试覆盖率
+运行 `tests/run-all-tests.sh` 时会先显示测试菜单，可通过 `printf '1\n' | bash tests/run-all-tests.sh` 在 CI 场景中直接选择“运行所有测试”。
 
-- **快速功能测试**: 15个测试，验证基本功能
-- **错误处理测试**: 19个测试，验证各种异常场景
-- **集成测试**: 11个测试，验证端到端工作流（7个完整场景）
-- **总测试数**: 45个测试
-- **通过率**: 100%
-- **跨平台支持**: macOS/Linux 自动适配
+### 测试内容概览
 
-### 测试特性
+- **quick-test.sh**: 覆盖帮助信息、默认配置生成、provider 管理、Keychain 操作与模型切换等基础行为。
+- **test-errors.sh**: 构造非法 JSON、无效参数、缺失依赖等异常场景，验证错误提示是否准确。
+- **test-integration.sh**: 以七个端到端场景模拟真实使用流程（首次初始化、自定义 provider、Token 优先级、批量操作等）。
+- **test-report.html**: `run-all-tests.sh` 结束后生成的可视化报告，包含统计概览和时间戳。
 
-- ✅ 跨平台自动检测
-- ✅ 智能跳过平台不支持的测试
-- ✅ 完整的错误场景验证
-- ✅ Token 优先级验证
-- ✅ HTML 测试报告生成
-- ✅ 测试结果实时汇总
+### 测试亮点
+
+- ✅ 自动检测操作系统并在不支持的功能上回退或跳过。
+- ✅ 对 token、配置文件和 Keychain 的读写进行了大量断言，覆盖 50+ 关键检查点。
+- ✅ 所有脚本在测试结束时清理环境，避免污染用户配置。
+- ✅ 支持在 macOS 上完整验证 Keychain 流程，在其它平台输出替代建议。
 
 ## 👨‍💻 开发
 
@@ -251,56 +224,9 @@ cd homebrew-tools
 # 运行脚本
 ./scripts/switch-claude.sh help
 
-# 测试 Formula
-./tests/test-formula.sh
-
 # 运行完整测试套件
 bash tests/run-all-tests.sh
 ```
-
-### 跨平台开发
-
-```bash
-# 平台检测模块
-source scripts/platform-detector.sh
-echo "OS_TYPE: $OS_TYPE"
-echo "HAS_KEYCHAIN: $HAS_KEYCHAIN"
-
-# 测试命令可用性
-is_command_available "set-keychain"  # macOS: true, Linux: false
-```
-
-## 🚀 发布管理
-
-### 开发者发布流程
-
-如果您是项目维护者，可以使用以下命令发布新版本：
-
-```bash
-# 发布补丁版本 (修复bug)
-./scripts/release.sh patch
-
-# 发布次要版本 (新功能)
-./scripts/release.sh minor
-
-# 发布主要版本 (重大更新)
-./scripts/release.sh major
-
-# 发布指定版本
-./scripts/release.sh 1.5.0
-
-# 查看当前版本
-./scripts/release.sh current
-```
-
-### 自动化流程
-
-- 🏷️ **标签创建**: 自动创建Git标签和GitHub Release
-- 📦 **Formula更新**: 自动更新Homebrew Formula的版本和SHA256
-- 🧪 **CI测试**: 每次发布都经过完整的CI/CD测试
-- 📋 **变更日志**: 基于Git提交自动生成发布说明
-
-详细发布指南请参考 [RELEASE-GUIDE.md](docs/RELEASE-GUIDE.md)。
 
 ### 贡献指南
 
@@ -313,8 +239,9 @@ is_command_available "set-keychain"  # macOS: true, Linux: false
 ### 测试要求
 
 提交 PR 前请确保：
+
 - [ ] 运行完整测试套件：`bash tests/run-all-tests.sh`
-- [ ] 通过所有测试（45个测试）
+- [ ] 确认 quick/errors/integration 三个脚本全部通过
 - [ ] 跨平台兼容性（macOS/Linux）
 - [ ] 更新相关文档
 
@@ -335,13 +262,23 @@ MIT License
 - [Homebrew 官方文档](https://docs.brew.sh/)
 - [项目 Issues](https://github.com/yinzhenyu-su/homebrew-tools/issues)
 - [测试套件文档](tests/README.md)
-- [跨平台设计文档](docs/CROSS-PLATFORM-DESIGN.md)
 
 ## 📊 版本历史
+
+### v2.0.1 (2025-11-14)
+
+**亮点:**
+
+- ✨ 新增平台感知帮助与 `--system-info`，按系统展示命令可用性。
+- ✨ provider.json 支持自动初始化与严格 JSON 校验，自定义 provider 流程更稳健。
+- 🔒 Token 查找顺序统一为 Keychain → 环境变量 → provider.json → 交互式输入，并在 `current` 中脱敏显示。
+- ⚙️ `clear` 命令加入交互确认并扩展至清理 Keychain/配置目录。
+- 🧪 扩展测试套件覆盖首次使用、自定义 provider、批量操作与异常场景。
 
 ### v1.0.3 (2025-11-09)
 
 **重大更新:**
+
 - ✨ 跨平台功能检测模块
 - ✨ 动态帮助信息生成
 - ✨ 命令可用性检查
@@ -349,6 +286,7 @@ MIT License
 - ✨ 完整测试套件（45个测试）
 
 **功能增强:**
+
 - 🔧 Provider 配置管理
 - 🔧 自定义 Provider 支持
 - 🔧 Token 优先级验证
@@ -356,12 +294,12 @@ MIT License
 - 🔧 智能错误处理
 
 **测试优化:**
+
 - 🧪 7个完整集成测试场景
 - 🧪 跨平台自动适配
 - 🧪 智能跳过不支持功能
 - 🧪 测试结果实时汇总
 
 **文档完善:**
+
 - 📚 完整的测试套件文档
-- 📚 跨平台设计文档
-- 📚 平台功能矩阵文档
