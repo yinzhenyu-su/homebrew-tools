@@ -23,16 +23,16 @@ brew install switch-claude
 ### 基本用法
 
 ```bash
-# 显示帮助
+# 显示帮助 (或 sc help)
 switch-claude help
 
-# 显示当前配置
+# 显示当前配置 (或 sc current)
 switch-claude current
 
 # 切换到不同模型
-switch-claude glm      # 切换到 GLM 模型
-switch-claude kimi     # 切换到 Kimi 模型
-switch-claude minimax  # 切换到 Minimax 模型
+switch-claude glm      # 切换到 GLM 模型 (或 sc glm)
+switch-claude kimi     # 切换到 Kimi 模型 (或 sc kimi)
+switch-claude minimax  # 切换到 Minimax 模型 (或 sc minimax)
 ```
 
 ### 🔑 Token 管理
@@ -41,14 +41,14 @@ switch-claude minimax  # 切换到 Minimax 模型
 
 ```bash
 # 推荐：使用 provider.json 存储
-switch-claude set-token glm "your_glm_token"
-switch-claude set-token kimi "your_kimi_token"
-switch-claude set-token minimax "your_minimax_token"
+switch-claude set-token glm "your_glm_token"      # 设置 GLM token (或 sc set-token glm "your_glm_token")
+switch-claude set-token kimi "your_kimi_token"    # 设置 Kimi token (或 sc set-token kimi "your_kimi_token")
+switch-claude set-token minimax "your_minimax_token"  # 设置 Minimax token (或 sc set-token minimax "your_minimax_token")
 
 # 最安全：使用 Keychain 存储（macOS）
-switch-claude set-keychain glm "your_glm_token"
-switch-claude set-keychain kimi "your_kimi_token"
-switch-claude set-keychain minimax "your_minimax_token"
+switch-claude set-keychain glm "your_glm_token"      # Keychain 存储 GLM token (或 sc set-keychain glm "your_glm_token")
+switch-claude set-keychain kimi "your_kimi_token"    # Keychain 存储 Kimi token (或 sc set-keychain kimi "your_kimi_token")
+switch-claude set-keychain minimax "your_minimax_token"  # Keychain 存储 Minimax token (或 sc set-keychain minimax "your_minimax_token")
 ```
 
 脚本会按照下方“[🔐 Token 优先级](#-token-优先级)”章节所述的顺序查找凭证，若所有来源都为空会提示你在终端中输入 token。macOS 用户优先推荐 `set-keychain`，其它平台可使用 `set-token` 写入 `provider.json`，环境变量适合临时调试。
