@@ -478,6 +478,18 @@ scenario_restore_command() {
     echo "y" | restore_output=$("$SWITCH_SCRIPT" restore "$backup_ts" 2>&1)
     assert_contains "$restore_output" "已从备份恢复" "restore 指定时间戳成功"
 
+    # 4. 无效时间戳应报错并列出可用备份
+    local bad_ts_output
+    bad_ts_output=$("$SWITCH_SCRIPT" restore wrongtimestamp 2>&1) || true
+    assert_contains "$bad_ts_output" "未找到匹配的备份" "无效时间戳显示错误"
+    assert_contains "$bad_ts_output" "$backup_ts" "无效时间戳时列出可用备份"
+
+    # 5. 无备份时应有提示（清理备份后测试）
+    rm -f "$SWITCH_CLAUDE_CONFIG_DIR"/settings.json.backup.*
+    local no_backup_output
+    no_backup_output=$("$SWITCH_SCRIPT" restore 2>&1) || true
+    assert_contains "$no_backup_output" "没有找到备份文件" "无备份时显示提示"
+
     log_success "场景 8 完成: restore 命令"
 }
 

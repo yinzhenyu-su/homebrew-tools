@@ -14,9 +14,8 @@ homebrew-tools/
 ├── tests/                       # 测试文件目录
 │   ├── README.md               # 测试套件文档
 │   ├── run-all-tests.sh        # 测试套件主脚本 (477行)
-│   ├── quick-test.sh           # 快速功能测试 (398行)
-│   ├── test-errors.sh          # 错误处理测试 (458行)
-│   ├── test-integration.sh     # 集成测试 (515行)
+│   ├── test-errors.sh          # 错误处理测试
+│   ├── test-integration.sh     # 集成测试
 │   └── test-report.html        # 生成的HTML测试报告
 └── .github/                     # GitHub 配置
     └── workflows/              # GitHub Actions 工作流
@@ -42,19 +41,8 @@ homebrew-tools/
   - HTML 测试报告生成
   - 跨平台自动适配（macOS/Linux）
 
-- **`tests/quick-test.sh`** (398行) - 快速功能测试
-  - 15个核心功能测试
-  - 包括 help、provider 管理、token 管理、模型切换、Keychain 操作等
-  - 支持 macOS Keychain 功能测试
-  - 支持 Linux 环境（自动跳过 Keychain 相关测试）
-
-- **`tests/test-errors.sh`** (458行) - 错误处理测试
-  - 19个错误场景测试
-  - 包括损坏 JSON、无效配置、权限问题、参数验证等
-  - 智能跳过：macOS 系统自动跳过 jq 未安装测试
-  - 跨平台错误处理验证
-
-- **`tests/test-integration.sh`** (515行) - 集成测试
+- **`tests/test-errors.sh`** - 错误处理测试
+- **`tests/test-integration.sh`** - 集成测试
   - 7个完整用户场景（首次使用、自定义 Provider、Token 优先级、模型切换、Keychain 管理、配置恢复、批量操作）
   - 端到端工作流验证
   - Token 优先级测试（Keychain > Env > File > Prompt）
@@ -165,7 +153,6 @@ switch-claude add-provider MyAPI '{
 bash tests/run-all-tests.sh
 
 # 运行单个测试套件
-bash tests/quick-test.sh          # 快速功能测试（15个测试）
 bash tests/test-errors.sh         # 错误处理测试（19个测试）
 bash tests/test-integration.sh    # 集成测试（11个测试）
 
@@ -181,7 +168,7 @@ open tests/test-report.html
 ./scripts/switch-claude.sh kimi
 
 # 手动测试特定功能
-bash -x tests/quick-test.sh        # 调试模式运行
+bash -x tests/test-errors.sh       # 调试模式运行
 ```
 
 ## 依赖要求
@@ -202,7 +189,7 @@ bash -x tests/quick-test.sh        # 调试模式运行
 
 - **总代码行数**: ~2950+ 行
   - 主脚本: 1513行
-  - 测试脚本: 1848行（run-all-tests.sh: 477行 + quick-test.sh: 398行 + test-errors.sh: 458行 + test-integration.sh: 515行）
+  - 测试脚本（test-errors.sh、test-integration.sh）
   - 文档: 约 600+ 行
 
 - **测试覆盖**: 45个测试

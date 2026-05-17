@@ -378,7 +378,33 @@ test_no_loop_in_provider_config() {
     assert_command_success "正常添加 provider" "$SWITCH_SCRIPT" add-provider "TestAPI" "$config"
 }
 
-# 测试 19: 重复添加同一 provider
+# 测试 21: restore 无效时间戳（应列出可用备份）
+test_restore_bad_timestamp() {
+    log_info "测试: restore 无效时间戳"
+
+    # 确保 provider.json 存在（触发备份目录初始化）
+    "$SWITCH_SCRIPT" list-providers > /dev/null 2>&1 || true
+
+    # 创建两个测试备份
+    echo '{"model":"glm"}' > "$SWITCH_CLAUDE_SETTINGS.backup.20260517_120000"
+    echo '{"model":"kimi"}' > "$SWITCH_CLAUDE_SETTINGS.backup.20260518_120000"
+
+    # 无效时间戳：应该失败并输出错误 + 列出可用备份
+    assert_command_fails_with_message "未找到匹配的备份" \
+        "restore 无效时间戳显示错误" \
+        "$SWITCH_SCRIPT" restore wrongtimestamp
+
+    # 验证输出中包含可用备份列表
+    local output
+    output=$("$SWITCH_SCRIPT" restore wrongtimestamp 2>&1) || true
+    if echo "$output" | grep -q "20260517_120000"; then
+        log_success "restore 无效时间戳列出可用备份"
+    else
+        log_error "restore 无效时间戳未列出可用备份"
+    fi
+}
+
+# 测试 22: 重复添加同一 provider
 test_duplicate_provider() {
     log_info "测试: 重复添加 provider"
 
@@ -435,6 +461,7 @@ main() {
     test_no_loop_in_provider_config
     test_duplicate_provider
     test_very_long_token
+    test_restore_bad_timestamp
 
     # 清理环境
     log_info "清理测试环境..."

@@ -187,7 +187,6 @@ sc kimi                  # 等同于 switch-claude kimi
 CI=true bash tests/run-all-tests.sh
 
 # 运行特定测试
-bash tests/switch-claude/quick-test.sh
 bash tests/switch-claude/test-errors.sh
 bash tests/switch-claude/test-integration.sh
 ```
@@ -196,9 +195,8 @@ bash tests/switch-claude/test-integration.sh
 
 ### 测试内容概览
 
-- **switch-claude/quick-test.sh**: 覆盖帮助信息、默认配置生成、provider 管理、Keychain 操作与模型切换等基础行为 (29 cases)。
-- **switch-claude/test-errors.sh**: 构造非法 JSON、无效参数、缺失依赖等异常场景，验证错误提示是否准确 (24 cases)。
-- **switch-claude/test-integration.sh**: 以九个端到端场景模拟真实使用流程（首次初始化、自定义 provider、Token 优先级、verify/restore 等）。
+- **switch-claude/test-errors.sh**: 构造非法 JSON、无效参数、缺失依赖等异常场景，验证错误提示是否准确 (26 cases)。
+- **switch-claude/test-integration.sh**: 以端到端场景模拟真实使用流程（首次初始化、自定义 provider、Token 优先级、verify/restore 等）。
 - **test-report.html**: `run-all-tests.sh` 结束后生成的可视化报告，包含统计概览和时间戳。
 
 ### 测试亮点

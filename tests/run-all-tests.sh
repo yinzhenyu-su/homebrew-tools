@@ -15,7 +15,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 自动发现测试套件：从 tests/*/ 子目录中收集 test-*.sh 或 quick-test.sh 等脚本
+# 自动发现测试套件：从 tests/*/ 子目录中收集所有 .sh 测试脚本
 declare -a TEST_SUITES=()     # 描述
 declare -a TEST_SCRIPTS=()    # 脚本路径
 

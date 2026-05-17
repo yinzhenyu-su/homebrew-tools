@@ -8,7 +8,6 @@
 tests/
 ├── README.md                  # 本文件
 ├── run-all-tests.sh           # 运行所有测试的主脚本
-├── quick-test.sh              # 快速功能测试 (macOS/Linux)
 ├── test-errors.sh             # 错误处理测试
 ├── test-integration.sh        # 集成测试
 └── test-report.html           # 生成的HTML测试报告
@@ -23,7 +22,6 @@ tests/
 bash tests/run-all-tests.sh
 
 # 方式 2: 直接运行单个测试套件
-bash tests/quick-test.sh        # 快速测试 (macOS/Linux)
 bash tests/test-errors.sh       # 错误测试
 bash tests/test-integration.sh  # 集成测试
 ```
@@ -38,20 +36,14 @@ bash tests/test-integration.sh  # 集成测试
 ║          Switch Claude 测试套件                              ║
 ║                                                              ║
 ║  1. 运行所有测试 (推荐)                                       ║
-║  2. 仅运行快速测试                                           ║
-║  3. 仅运行错误测试                                           ║
-║  4. 仅运行集成测试                                           ║
-║  5. 自定义选择                                               ║
+║  2. 仅运行错误测试                                           ║
+║  3. 仅运行集成测试                                           ║
+║  4. 自定义选择                                               ║
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
 ### ⚠️ 跨平台说明
-
-**所有平台用户**：
-```bash
-bash tests/quick-test.sh
-```
 
 ✅ **支持**: 脚本会自动检测操作系统并适配测试：
 - **macOS**: 完整测试，包括 Keychain 功能
@@ -60,9 +52,6 @@ bash tests/quick-test.sh
 ### 运行特定测试
 
 ```bash
-# 快速测试（适用于所有平台）
-bash tests/quick-test.sh
-
 # 仅运行错误处理测试
 bash tests/test-errors.sh
 
@@ -72,35 +61,7 @@ bash tests/test-integration.sh
 
 ## 📊 测试内容
 
-### 1. 快速功能测试 (quick-test.sh - 跨平台)
-
-**测试范围:**
-- ✅ help 命令
-- ✅ 依赖检查（jq）
-- ✅ provider.json 自动创建
-- ✅ list-providers 命令
-- ✅ show-provider-config 命令
-- ✅ add-provider 命令
-- ✅ set-token 命令
-- ✅ remove-provider 命令
-- ✅ 内置 provider 保护
-- ✅ set-keychain 命令 ⭐ (macOS Keychain, Linux 自动跳过)
-- ✅ clear-keychain 命令 ⭐ (macOS Keychain, Linux 自动跳过)
-- ✅ clear-all-keychains 命令 ⭐ (macOS Keychain, Linux 自动跳过)
-- ✅ 模型切换（GLM、Kimi、Minimax）
-- ✅ current 命令
-- ✅ 输入验证
-- ✅ 跨平台功能检测
-- ✅ 动态帮助信息生成
-- ✅ 命令可用性检查
-
-**运行时间:** < 30 秒
-
-**说明:**
-- **macOS**: 完整测试，包括 Keychain 功能
-- **Linux/Ubuntu**: 自动跳过 Keychain 相关测试，使用 `set-token` 命令
-
-### 2. 错误处理测试 (test-errors.sh)
+### 1. 错误处理测试 (test-errors.sh)
 
 **测试范围:**
 - ✅ 损坏的 JSON 文件检测
@@ -126,7 +87,7 @@ bash tests/test-integration.sh
 - 智能跳过：macOS 系统自动跳过 jq 未安装测试（避免权限问题）
 - 跨平台：自动检测操作系统，提供平台特定的错误信息
 
-### 3. 集成测试 (test-integration.sh)
+### 2. 集成测试 (test-integration.sh)
 
 **测试场景:**
 - ✅ 场景 1: 首次使用流程（自动创建配置）
@@ -231,7 +192,7 @@ open tests/test-report.html
 
 3. **Keychain 访问权限（仅 macOS）**
    - macOS 用户：需要访问系统 Keychain
-   - Ubuntu 用户：**跳过此步**，`quick-test.sh` 会自动处理
+   - Ubuntu 用户：**跳过此步**，测试脚本会自动处理
 
 4. **可选：安装 gum（美化的交互界面）**
    ```bash
@@ -289,7 +250,7 @@ TEST_TOKENS=(
 
 ```bash
 # 运行单个测试并查看详细输出
-bash -x tests/quick-test.sh
+bash -x tests/test-errors.sh
 ```
 
 ### 2. 检查测试数据
@@ -346,15 +307,14 @@ is_command_available "set-keychain"  # macOS: true, Linux: false
 # GitHub Actions 示例
 - name: Run Tests
   run: |
-    bash tests/quick-test.sh
     bash tests/test-errors.sh
     bash tests/test-integration.sh
 
 # 跨平台测试
 - name: Test on macOS
-  run: bash tests/quick-test.sh
+  run: bash tests/test-errors.sh
 - name: Test on Linux
-  run: bash tests/quick-test.sh
+  run: bash tests/test-errors.sh
 ```
 
 ## 📚 更多资源

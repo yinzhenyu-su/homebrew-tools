@@ -786,8 +786,8 @@ restore_backup() {
         return 1
     fi
 
-    # 列出所有备份
-    if [[ $# -eq 0 ]]; then
+    # 列出所有备份（无参数或空参数）
+    if [[ $# -eq 0 || -z "$1" ]]; then
         echo -e "${BLUE}可用备份:${NC}"
         echo ""
         local i=1
@@ -823,7 +823,19 @@ restore_backup() {
         done
         if [[ -z "$matched" ]]; then
             echo -e "${RED}未找到匹配的备份: $target${NC}"
-            echo "使用 'switch-claude restore' 查看可用备份"
+            echo ""
+            # 列出可用备份
+            local available=()
+            for b in "${backups[@]}"; do
+                local bt=$(basename "$b")
+                available+=("${bt#settings.json.backup.}")
+            done
+            if [[ ${#available[@]} -gt 0 ]]; then
+                echo "可用备份:"
+                for ts in "${available[@]}"; do
+                    echo "  $ts"
+                done
+            fi
             return 1
         fi
         local selected="$matched"

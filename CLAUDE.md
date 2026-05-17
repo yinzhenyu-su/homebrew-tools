@@ -48,10 +48,8 @@ scripts/ 加脚本 → Formula/ 加 .rb → tests/ 加同名子目录 → 工具
 ### 运行测试
 ```bash
 bash tests/run-all-tests.sh          # 全部测试
-bash tests/switch-claude/quick-test.sh             # 快速功能测试 (29 cases)
-bash tests/switch-claude/test-errors.sh            # 错误处理测试 (24 cases)
+bash tests/switch-claude/test-errors.sh            # 错误处理测试 (26 cases)
 bash tests/switch-claude/test-integration.sh       # 集成测试 (9 scenarios)
-CI=true bash tests/switch-claude/quick-test.sh     # CI 模式（跳过交互）
 ```
 
 ### 项目结构
@@ -63,8 +61,7 @@ Formula/
 tests/
   run-all-tests.sh         # 自动发现 tests/*/ 子目录测试
   switch-claude/
-    quick-test.sh          # 功能测试 (29 cases)
-    test-errors.sh         # 异常测试 (24 cases)
+    test-errors.sh         # 异常测试 (26 cases)
     test-integration.sh    # 集成测试 (9 scenarios)
 .github/workflows/
   release.yml              # 发布工作流（tag 前缀 → 多 formula）
