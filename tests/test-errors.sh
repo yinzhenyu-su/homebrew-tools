@@ -15,6 +15,10 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SWITCH_SCRIPT="$SCRIPT_DIR/../scripts/switch-claude.sh"
 
+# 隔离测试路径，避免修改用户真实配置
+export SWITCH_CLAUDE_CONFIG_DIR="${SWITCH_CLAUDE_CONFIG_DIR:-$(mktemp -d /tmp/switch-claude-test-XXXX)}"
+export SWITCH_CLAUDE_SETTINGS="${SWITCH_CLAUDE_SETTINGS:-$SWITCH_CLAUDE_CONFIG_DIR/settings.json}"
+
 # 测试计数器
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -114,8 +118,8 @@ restore_jq() {
 
 # 清理环境
 cleanup_test_env() {
-    rm -rf ~/.config/switch-claude
-    rm -f ~/.claude/settings.json.backup.*
+    rm -rf "$SWITCH_CLAUDE_CONFIG_DIR"
+    rm -f "$SWITCH_CLAUDE_CONFIG_DIR"/settings.json.backup.*
     security delete-generic-password -a "$USER" -s "switch-claude-glm" 2>/dev/null || true
     security delete-generic-password -a "$USER" -s "switch-claude-kimi" 2>/dev/null || true
     security delete-generic-password -a "$USER" -s "switch-claude-minimax" 2>/dev/null || true
@@ -128,10 +132,10 @@ test_corrupted_json() {
     log_info "测试: 损坏的 JSON 文件"
 
     cleanup_test_env
-    mkdir -p ~/.config/switch-claude
+    mkdir -p "$SWITCH_CLAUDE_CONFIG_DIR"
 
     # 创建损坏的 JSON
-    echo '{"invalid": json}' > ~/.config/switch-claude/provider.json
+    echo '{"invalid": json}' > "$SWITCH_CLAUDE_CONFIG_DIR"/provider.json
 
     assert_command_fails_with_message "格式不正确" "检测到损坏的 JSON" "$SWITCH_SCRIPT" list-providers
 }
@@ -141,10 +145,10 @@ test_empty_json() {
     log_info "测试: 空文件"
 
     cleanup_test_env
-    mkdir -p ~/.config/switch-claude
+    mkdir -p "$SWITCH_CLAUDE_CONFIG_DIR"
 
     # 创建空文件
-    touch ~/.config/switch-claude/provider.json
+    touch "$SWITCH_CLAUDE_CONFIG_DIR"/provider.json
 
     assert_command_fails_with_message "没有配置任何 provider" "检测到空文件" "$SWITCH_SCRIPT" list-providers
 }
@@ -154,10 +158,10 @@ test_empty_object_json() {
     log_info "测试: 空对象 JSON"
 
     cleanup_test_env
-    mkdir -p ~/.config/switch-claude
+    mkdir -p "$SWITCH_CLAUDE_CONFIG_DIR"
 
     # 创建空对象
-    echo '{}' > ~/.config/switch-claude/provider.json
+    echo '{}' > "$SWITCH_CLAUDE_CONFIG_DIR"/provider.json
 
     assert_command_fails_with_message "没有配置任何 provider" "检测到空对象" "$SWITCH_SCRIPT" list-providers
 }
@@ -257,6 +261,10 @@ test_remove_builtin_provider() {
     assert_command_fails_with_message "不能删除内置 provider" \
         "拒绝删除 minimax" \
         "$SWITCH_SCRIPT" remove-provider "minimax"
+
+    assert_command_fails_with_message "不能删除内置 provider" \
+        "拒绝删除 deepseek" \
+        "$SWITCH_SCRIPT" remove-provider "deepseek"
 }
 
 # 测试 12: 不存在的 provider
@@ -286,8 +294,8 @@ test_incomplete_parameters() {
         "set-token 参数不足" \
         "$SWITCH_SCRIPT" set-token "glm"
 
-    # add-provider 需要 2 个参数
-    assert_command_fails_with_message "需要 2 个参数" \
+    # add-provider 需要 0 或 2 个参数（1 个参数报错）
+    assert_command_fails_with_message "需要 0 或 2 个参数" \
         "add-provider 参数不足" \
         "$SWITCH_SCRIPT" add-provider "TestAPI"
 
@@ -331,20 +339,20 @@ test_invalid_file_permissions() {
     log_info "测试: 无效配置文件权限"
 
     cleanup_test_env
-    mkdir -p ~/.config/switch-claude
+    mkdir -p "$SWITCH_CLAUDE_CONFIG_DIR"
 
     # 创建文件
-    echo '{"glm": {}}' > ~/.config/switch-claude/provider.json
+    echo '{"glm": {}}' > "$SWITCH_CLAUDE_CONFIG_DIR"/provider.json
 
     # 移除所有权限
-    chmod 000 ~/.config/switch-claude/provider.json
+    chmod 000 "$SWITCH_CLAUDE_CONFIG_DIR"/provider.json
 
     # 注意：这个测试可能不会按预期失败，因为脚本可能仍有读取权限
     # 我们记录这个测试但不强制要求失败
     log_warning "权限测试可能需要根据实际系统调整"
 
     # 恢复权限
-    chmod 644 ~/.config/switch-claude/provider.json
+    chmod 644 "$SWITCH_CLAUDE_CONFIG_DIR"/provider.json
 }
 
 # 测试 17: 无效命令

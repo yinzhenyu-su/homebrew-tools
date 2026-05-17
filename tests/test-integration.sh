@@ -15,6 +15,10 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SWITCH_SCRIPT="$SCRIPT_DIR/../scripts/switch-claude.sh"
 
+# 隔离测试路径，避免修改用户真实配置
+export SWITCH_CLAUDE_CONFIG_DIR="${SWITCH_CLAUDE_CONFIG_DIR:-$(mktemp -d /tmp/switch-claude-test-XXXX)}"
+export SWITCH_CLAUDE_SETTINGS="${SWITCH_CLAUDE_SETTINGS:-$SWITCH_CLAUDE_CONFIG_DIR/settings.json}"
+
 # 测试计数器
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -102,8 +106,8 @@ cleanup_test_env() {
     log_info "清理测试环境..."
 
     # 清理配置文件
-    rm -rf ~/.config/switch-claude
-    rm -f ~/.claude/settings.json.backup.*
+    rm -rf "$SWITCH_CLAUDE_CONFIG_DIR"
+    rm -f "$SWITCH_CLAUDE_CONFIG_DIR"/settings.json.backup.*
 
     # 清理 Keychain
     for provider in glm kimi minimax TestAPI CustomAPI; do
@@ -143,9 +147,10 @@ scenario_first_time_user() {
     assert_contains "$list_output" "glm" "显示 glm provider"
     assert_contains "$list_output" "kimi" "显示 kimi provider"
     assert_contains "$list_output" "minimax" "显示 minimax provider"
+    assert_contains "$list_output" "deepseek" "显示 deepseek provider"
 
     # 3. 验证 provider.json 已创建
-    assert_file_exists "$HOME/.config/switch-claude/provider.json" "provider.json 已自动创建"
+    assert_file_exists "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" "provider.json 已自动创建"
 
     # 4. 用户查看 provider 配置
     log_info "步骤 3: 用户查看 provider 配置"
@@ -155,6 +160,7 @@ scenario_first_time_user() {
     assert_contains "$show_output" "[glm]" "显示 GLM 配置"
     assert_contains "$show_output" "[kimi]" "显示 Kimi 配置"
     assert_contains "$show_output" "[minimax]" "显示 Minimax 配置"
+    assert_contains "$show_output" "[deepseek]" "显示 Deepseek 配置"
 
     log_success "场景 1 完成: 首次用户流程"
 }
@@ -193,7 +199,7 @@ scenario_custom_provider() {
 
     # 4. 验证 token 已保存
     local saved_token
-    saved_token=$(jq -r '.CustomAPI.ANTHROPIC_AUTH_TOKEN' "$HOME/.config/switch-claude/provider.json" 2>/dev/null)
+    saved_token=$(jq -r '.CustomAPI.ANTHROPIC_AUTH_TOKEN' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)
     assert_equals "custom-token-123" "$saved_token" "Token 已保存到文件"
 
     # 5. 切换到自定义 provider
@@ -204,7 +210,7 @@ scenario_custom_provider() {
 
     # 6. 验证配置已应用到 Claude 设置
     local claude_config
-    claude_config=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$HOME/.claude/settings.json" 2>/dev/null)
+    claude_config=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$SWITCH_CLAUDE_SETTINGS" 2>/dev/null)
     assert_equals "custom-token-123" "$claude_config" "配置已应用到 Claude"
 
     # 7. 删除自定义 provider
@@ -244,7 +250,7 @@ scenario_token_priority() {
 
     # 验证配置中的 token 是 keychain-token
     local applied_token
-    applied_token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$HOME/.claude/settings.json" 2>/dev/null)
+    applied_token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$SWITCH_CLAUDE_SETTINGS" 2>/dev/null)
     assert_equals "keychain-token" "$applied_token" "优先级: Keychain 优先"
 
     # 5. 清除 Keychain，验证使用环境变量
@@ -252,7 +258,7 @@ scenario_token_priority() {
     "$SWITCH_SCRIPT" clear-keychain "glm" > /dev/null 2>&1
     switch_output=$("$SWITCH_SCRIPT" glm 2>&1)
 
-    applied_token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$HOME/.claude/settings.json" 2>/dev/null)
+    applied_token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$SWITCH_CLAUDE_SETTINGS" 2>/dev/null)
     assert_equals "env-token" "$applied_token" "优先级: Env 优先"
 
     # 6. 清除环境变量，验证使用文件中的 token
@@ -260,7 +266,7 @@ scenario_token_priority() {
     unset GLM_TOKEN
     switch_output=$("$SWITCH_SCRIPT" glm 2>&1)
 
-    applied_token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$HOME/.claude/settings.json" 2>/dev/null)
+    applied_token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN' "$SWITCH_CLAUDE_SETTINGS" 2>/dev/null)
     assert_equals "file-token" "$applied_token" "优先级: File 优先"
 
     log_success "场景 3 完成: Token 优先级"
@@ -286,7 +292,7 @@ scenario_complete_model_switching() {
     # 1. 切换到 GLM
     local glm_output
     glm_output=$("$SWITCH_SCRIPT" glm 2>&1)
-    assert_contains "$glm_output" "切换到 GLM 模型" "GLM 切换成功"
+    assert_contains "$glm_output" "切换到 glm 模型" "GLM 切换成功"
 
     # 2. 验证当前配置
     local current_output
@@ -297,7 +303,7 @@ scenario_complete_model_switching() {
     # 3. 切换到 Kimi
     local kimi_output
     kimi_output=$("$SWITCH_SCRIPT" kimi 2>&1)
-    assert_contains "$kimi_output" "切换到 Kimi 模型" "Kimi 切换成功"
+    assert_contains "$kimi_output" "切换到 kimi 模型" "Kimi 切换成功"
 
     # 4. 验证当前配置
     current_output=$("$SWITCH_SCRIPT" current 2>&1)
@@ -307,7 +313,7 @@ scenario_complete_model_switching() {
     # 5. 切换到 Minimax
     local minimax_output
     minimax_output=$("$SWITCH_SCRIPT" minimax 2>&1)
-    assert_contains "$minimax_output" "切换到 Minimax 模型" "Minimax 切换成功"
+    assert_contains "$minimax_output" "切换到 minimax 模型" "Minimax 切换成功"
 
     # 6. 验证当前配置
     current_output=$("$SWITCH_SCRIPT" current 2>&1)
@@ -316,7 +322,7 @@ scenario_complete_model_switching() {
 
     # 7. 验证配置文件已备份
     local backup_count
-    backup_count=$(ls -1 ~/.config/switch-claude/settings.json.backup.* 2>/dev/null | wc -l | tr -d ' ')
+    backup_count=$(ls -1 "$SWITCH_CLAUDE_CONFIG_DIR"/settings.json.backup.* 2>/dev/null | wc -l | tr -d ' ')
     # 动态验证：有备份文件即可（数量可能因环境而异）
     if [[ $backup_count -ge 1 ]]; then
         TESTS_RUN=$((TESTS_RUN + 1))
@@ -382,7 +388,7 @@ scenario_config_recovery() {
 
     # 2. 模拟配置文件损坏
     log_info "模拟配置文件损坏"
-    echo '{"invalid": json}' > ~/.config/switch-claude/provider.json
+    echo '{"invalid": json}' > "$SWITCH_CLAUDE_CONFIG_DIR"/provider.json
 
     # 3. 尝试运行命令应检测到错误
     local error_output
@@ -396,15 +402,88 @@ scenario_config_recovery() {
 
     # 5. 验证配置已恢复
     local provider_count
-    provider_count=$(jq '. | keys | length' "$HOME/.config/switch-claude/provider.json" 2>/dev/null)
-    assert_equals "3" "$provider_count" "默认配置已恢复"
+    provider_count=$(jq '. | keys | length' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)
+    assert_equals "4" "$provider_count" "默认配置已恢复"
 
     log_success "场景 6 完成: 配置恢复"
 }
 
-# 场景 7: 批量操作场景
+# 场景 7: verify 命令
+scenario_verify_command() {
+    log_section "场景 7: verify 命令"
+
+    cleanup_test_env
+    "$SWITCH_SCRIPT" list-providers > /dev/null 2>&1
+
+    log_info "测试 verify 命令..."
+
+    # 1. 无参 verify
+    local verify_output
+    verify_output=$("$SWITCH_SCRIPT" verify 2>&1)
+    assert_contains "$verify_output" "检查 provider" "verify 无参运行正常"
+    assert_contains "$verify_output" "[glm]" "verify 检查 GLM"
+    assert_contains "$verify_output" "[kimi]" "verify 检查 Kimi"
+    assert_contains "$verify_output" "[deepseek]" "verify 检查 Deepseek"
+
+    # 2. 指定 provider verify（未设置 token 应有警告）
+    local verify_glm
+    verify_glm=$("$SWITCH_SCRIPT" verify glm 2>&1)
+    assert_contains "$verify_glm" "检查 provider" "verify glm 运行正常"
+
+    # 3. 设置 token 后 verify
+    "$SWITCH_SCRIPT" set-token "glm" "verified-token" > /dev/null 2>&1
+    local verify_with_token
+    verify_with_token=$("$SWITCH_SCRIPT" verify glm 2>&1)
+    assert_contains "$verify_with_token" "provider.json" "verify 检测到 token 在 provider.json 中"
+
+    # 4. 对不存在 provider verify
+    assert_command_failure "verify 不存在的 provider 报错" "$SWITCH_SCRIPT" verify "NonExistent"
+
+    log_success "场景 7 完成: verify 命令"
+}
+
+# 场景 8: restore 命令
+scenario_restore_command() {
+    log_section "场景 8: restore 命令"
+
+    cleanup_test_env
+    "$SWITCH_SCRIPT" list-providers > /dev/null 2>&1
+
+    log_info "测试 restore 命令..."
+
+    # 1. 先进行一次切换，生成备份
+    "$SWITCH_SCRIPT" set-token "glm" "before-restore" > /dev/null 2>&1
+    "$SWITCH_SCRIPT" glm > /dev/null 2>&1
+
+    # 验证有备份文件
+    local backup_count
+    backup_count=$(ls -1 "$SWITCH_CLAUDE_CONFIG_DIR"/settings.json.backup.* 2>/dev/null | wc -l | tr -d ' ')
+    if [[ $backup_count -ge 1 ]]; then
+        TESTS_RUN=$((TESTS_RUN + 1))
+        log_success "备份文件已创建 (实际: $backup_count)"
+    else
+        TESTS_RUN=$((TESTS_RUN + 1))
+        log_error "备份文件未创建"
+    fi
+
+    # 2. 修改当前配置
+    "$SWITCH_SCRIPT" set-token "kimi" "after-restore-token" > /dev/null 2>&1
+    "$SWITCH_SCRIPT" kimi > /dev/null 2>&1
+
+    # 3. 用 restore 恢复
+    local restore_output
+    # 取最近一个备份的时间戳
+    local latest_backup=$(ls -1 "$SWITCH_CLAUDE_CONFIG_DIR"/settings.json.backup.* 2>/dev/null | head -1)
+    local backup_ts=$(basename "$latest_backup" | sed 's/settings\.json\.backup\.//')
+    echo "y" | restore_output=$("$SWITCH_SCRIPT" restore "$backup_ts" 2>&1)
+    assert_contains "$restore_output" "已从备份恢复" "restore 指定时间戳成功"
+
+    log_success "场景 8 完成: restore 命令"
+}
+
+# 场景 9: 批量操作场景
 scenario_batch_operations() {
-    log_section "场景 7: 批量操作场景"
+    log_section "场景 9: 批量操作场景"
 
     cleanup_test_env
     "$SWITCH_SCRIPT" list-providers > /dev/null 2>&1
@@ -424,8 +503,8 @@ scenario_batch_operations() {
 
     # 验证所有 provider 已添加
     local provider_count
-    provider_count=$(jq '. | keys | length' "$HOME/.config/switch-claude/provider.json" 2>/dev/null)
-    assert_equals "8" "$provider_count" "共添加 8 个 provider（3个内置 + 5个自定义）"
+    provider_count=$(jq '. | keys | length' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)
+    assert_equals "9" "$provider_count" "共添加 9 个 provider（4个内置 + 5个自定义）"
 
     # 验证可以列出所有
     local list_output
@@ -442,7 +521,7 @@ scenario_batch_operations() {
     # 验证 token 设置
     for i in {1..5}; do
         local token
-        token=$(jq -r ".Provider$i.ANTHROPIC_AUTH_TOKEN" "$HOME/.config/switch-claude/provider.json" 2>/dev/null)
+        token=$(jq -r ".Provider$i.ANTHROPIC_AUTH_TOKEN" "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)
         assert_equals "token-$i" "$token" "Provider$i token 正确"
     done
 
@@ -452,10 +531,10 @@ scenario_batch_operations() {
     done
 
     # 验证只剩内置 provider
-    provider_count=$(jq '. | keys | length' "$HOME/.config/switch-claude/provider.json" 2>/dev/null)
-    assert_equals "3" "$provider_count" "删除后剩 3 个内置 provider"
+    provider_count=$(jq '. | keys | length' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)
+    assert_equals "4" "$provider_count" "删除后剩 4 个内置 provider"
 
-    log_success "场景 7 完成: 批量操作"
+    log_success "场景 9 完成: 批量操作"
 }
 
 # 主函数
@@ -483,6 +562,8 @@ main() {
     scenario_complete_model_switching
     scenario_keychain_management
     scenario_config_recovery
+    scenario_verify_command
+    scenario_restore_command
     scenario_batch_operations
 
     # 清理环境

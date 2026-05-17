@@ -15,6 +15,10 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SWITCH_SCRIPT="$SCRIPT_DIR/../scripts/switch-claude.sh"
 
+# 隔离测试路径，避免修改用户真实配置
+export SWITCH_CLAUDE_CONFIG_DIR="${SWITCH_CLAUDE_CONFIG_DIR:-$(mktemp -d /tmp/switch-claude-test-XXXX)}"
+export SWITCH_CLAUDE_SETTINGS="${SWITCH_CLAUDE_SETTINGS:-$SWITCH_CLAUDE_CONFIG_DIR/settings.json}"
+
 # 测试计数器
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -108,8 +112,8 @@ cleanup_test_env() {
     log_info "清理测试环境..."
 
     # 清理配置文件
-    rm -rf ~/.config/switch-claude
-    rm -f ~/.claude/settings.json.backup.*
+    rm -rf "$SWITCH_CLAUDE_CONFIG_DIR"
+    rm -f "$SWITCH_CLAUDE_CONFIG_DIR"/settings.json.backup.*
 
     # 清理 Keychain
     security delete-generic-password -a "$USER" -s "switch-claude-glm" 2>/dev/null || true
@@ -128,7 +132,7 @@ setup_test_env() {
     chmod +x "$SWITCH_SCRIPT"
 
     # 创建必要的目录
-    mkdir -p ~/.config/switch-claude
+    mkdir -p "$SWITCH_CLAUDE_CONFIG_DIR"
 
     # 初始清理
     cleanup_test_env
@@ -173,11 +177,11 @@ test_provider_auto_init() {
     assert_command_success "自动创建 provider.json" "$SWITCH_SCRIPT" list-providers
 
     # 验证文件存在
-    assert_file_exists "$HOME/.config/switch-claude/provider.json" "provider.json 已创建"
+    assert_file_exists "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" "provider.json 已创建"
 
-    # 验证包含三个默认 provider
-    local provider_count=$(jq '. | keys | length' "$HOME/.config/switch-claude/provider.json" 2>/dev/null)
-    assert_equals "3" "$provider_count" "包含 3 个默认 provider"
+    # 验证包含默认 provider（当前 4 个内置）
+    local provider_count=$(jq '. | keys | length' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)
+    assert_equals "4" "$provider_count" "包含 4 个默认 provider"
 }
 
 # 测试 4: list-providers 命令
@@ -185,7 +189,7 @@ test_list_providers() {
     log_info "测试: list-providers 命令"
 
     # 先确保有 provider.json
-    if [[ ! -f "$HOME/.config/switch-claude/provider.json" ]]; then
+    if [[ ! -f "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" ]]; then
         "$SWITCH_SCRIPT" list-providers > /dev/null 2>&1
     fi
 
@@ -213,7 +217,7 @@ test_add_provider() {
     assert_command_success "添加自定义 provider" "$SWITCH_SCRIPT" add-provider "TestAPI" "$test_config"
 
     # 验证 provider 存在
-    local exists=$(jq -e '.TestAPI' "$HOME/.config/switch-claude/provider.json" > /dev/null 2>&1 && echo "1" || echo "0")
+    local exists=$(jq -e '.TestAPI' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" > /dev/null 2>&1 && echo "1" || echo "0")
     assert_equals "1" "$exists" "自定义 provider 已添加"
 }
 
@@ -225,7 +229,7 @@ test_set_token() {
     assert_command_success "设置 token" "$SWITCH_SCRIPT" set-token "glm" "test-token-12345"
 
     # 验证 token 已设置
-    local token=$(jq -r '.glm.ANTHROPIC_AUTH_TOKEN' "$HOME/.config/switch-claude/provider.json" 2>/dev/null)
+    local token=$(jq -r '.glm.ANTHROPIC_AUTH_TOKEN' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)
     assert_equals "test-token-12345" "$token" "Token 已保存到 provider.json"
 }
 
@@ -234,7 +238,7 @@ test_remove_provider() {
     log_info "测试: remove-provider 命令"
 
     # 先确保有 TestAPI
-    if [[ -z "$(jq -e '.TestAPI' "$HOME/.config/switch-claude/provider.json" 2>/dev/null)" ]]; then
+    if [[ -z "$(jq -e '.TestAPI' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" 2>/dev/null)" ]]; then
         local test_config='{
             "ANTHROPIC_AUTH_TOKEN": "",
             "ANTHROPIC_BASE_URL": "https://api.test.com/anthropic",
@@ -247,7 +251,7 @@ test_remove_provider() {
     echo "y" | assert_command_success "删除自定义 provider" "$SWITCH_SCRIPT" remove-provider "TestAPI"
 
     # 验证 provider 不存在
-    local exists=$(jq -e '.TestAPI' "$HOME/.config/switch-claude/provider.json" > /dev/null 2>&1 && echo "1" || echo "0")
+    local exists=$(jq -e '.TestAPI' "$SWITCH_CLAUDE_CONFIG_DIR/provider.json" > /dev/null 2>&1 && echo "1" || echo "0")
     assert_equals "0" "$exists" "自定义 provider 已删除"
 }
 
@@ -258,6 +262,7 @@ test_cannot_remove_builtin_provider() {
     assert_command_failure "不能删除内置 provider glm" "$SWITCH_SCRIPT" remove-provider "glm"
     assert_command_failure "不能删除内置 provider kimi" "$SWITCH_SCRIPT" remove-provider "kimi"
     assert_command_failure "不能删除内置 provider minimax" "$SWITCH_SCRIPT" remove-provider "minimax"
+    assert_command_failure "不能删除内置 provider deepseek" "$SWITCH_SCRIPT" remove-provider "deepseek"
 }
 
 # 测试 10: set-keychain 命令
@@ -324,7 +329,23 @@ test_show_current() {
     assert_command_success "显示当前配置" "$SWITCH_SCRIPT" current
 }
 
-# 测试 15: 验证 provider 名称格式
+# 测试 15: verify 命令
+test_verify_command() {
+    log_info "测试: verify 命令"
+
+    # 无参（验证所有）
+    assert_command_success "verify 所有 provider" "$SWITCH_SCRIPT" verify
+}
+
+# 测试 16: restore 命令
+test_restore_command() {
+    log_info "测试: restore 命令"
+
+    # 无备份时应有提示
+    assert_command_failure "无备份时显示提示" "$SWITCH_SCRIPT" restore
+}
+
+# 测试 17: 验证 provider 名称格式
 test_invalid_provider_name() {
     log_info "测试: 无效 provider 名称验证"
 
@@ -364,6 +385,8 @@ main() {
     test_clear_keychain
     test_clear_all_keychains
     test_model_switching
+    test_verify_command
+    test_restore_command
     test_show_current
     test_invalid_provider_name
 

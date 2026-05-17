@@ -14,9 +14,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 配置文件路径
-CONFIG_FILE="$HOME/.claude/settings.json"
-CONFIG_DIR="$HOME/.config/switch-claude"
+# 配置文件路径（可通过环境变量覆盖，用于测试隔离）
+: "${SWITCH_CLAUDE_CONFIG_DIR:="$HOME/.config/switch-claude"}"
+: "${SWITCH_CLAUDE_SETTINGS:="$HOME/.claude/settings.json"}"
+
+CONFIG_DIR="$SWITCH_CLAUDE_CONFIG_DIR"
+CONFIG_FILE="$SWITCH_CLAUDE_SETTINGS"
 TOKENS_FILE="$CONFIG_DIR/tokens.json"
 PROVIDER_CONFIG_FILE="$CONFIG_DIR/provider.json"
 
@@ -75,7 +78,7 @@ validate_provider() {
 
     # 首先检查内置 provider
     case "$provider" in
-        "glm"|"kimi"|"minimax") return 0 ;;
+        "glm"|"kimi"|"minimax"|"deepseek") return 0 ;;
     esac
 
     # 然后检查自定义 provider
@@ -175,7 +178,7 @@ validate_provider_name() {
 
     # 检查是否与内置 provider 冲突
     case "$name" in
-        "glm"|"kimi"|"minimax")
+        "glm"|"kimi"|"minimax"|"deepseek")
             echo -e "${YELLOW}警告: '$name' 是内置 provider，建议使用其他名称${NC}"
             read -r -p "确定要继续吗？(y/n): " confirm
             if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
@@ -382,16 +385,195 @@ show_provider_config() {
     fi
 }
 
-# 添加新的 provider
-add_provider() {
-    if [[ $# -ne 2 ]]; then
-        echo -e "${RED}错误: add-provider 需要 2 个参数${NC}"
-        echo "用法: switch-claude add-provider <provider_name> <env_config_json>"
+# 验证 provider 配置
+verify_provider() {
+    local provider="${1:-}"
+
+    if [[ -z "$provider" ]]; then
+        # 没有指定 provider，验证所有
+        echo -e "${BLUE}验证所有 provider 配置...${NC}"
+        echo ""
+
+        if [[ ! -f "$PROVIDER_CONFIG_FILE" ]]; then
+            echo -e "${RED}✗ provider.json 不存在${NC}"
+            echo "请运行: switch-claude init-provider-config"
+            return 1
+        fi
+
+        local providers=$(jq -r 'keys[]' "$PROVIDER_CONFIG_FILE" 2>/dev/null)
+        local all_ok=true
+        for p in $providers; do
+            if ! verify_provider "$p"; then
+                all_ok=false
+            fi
+        done
+
+        if [[ "$all_ok" == "true" ]]; then
+            echo -e "${GREEN}所有 provider 配置验证通过${NC}"
+        fi
+        return 0
+    fi
+
+    # 验证指定 provider
+    local ok=true
+
+    # 1. 检查 provider 是否存在
+    echo -n "检查 provider [$provider] ... "
+    if validate_provider "$provider" 2>/dev/null; then
+        echo -e "${GREEN}✓${NC}"
+    else
+        echo -e "${RED}✗ 不存在${NC}"
         return 1
     fi
 
+    # 2. 检查 token 是否配置
+    echo -n "  检查 token ... "
+    local token=""
+    if [[ "$OS_TYPE" == "macos" ]] && command -v security >/dev/null 2>&1; then
+        token=$(security find-generic-password -a "$USER" -s "switch-claude-$provider" -w 2>/dev/null)
+        if [[ -n "$token" ]]; then
+            echo -e "${GREEN}✓ Keychain${NC}"
+            ok=true
+        fi
+    fi
+    if [[ -z "$token" ]]; then
+        token=$(jq -r ".$provider.ANTHROPIC_AUTH_TOKEN // empty" "$PROVIDER_CONFIG_FILE" 2>/dev/null)
+        if [[ -n "$token" ]]; then
+            echo -e "${GREEN}✓ provider.json${NC}"
+        else
+            # 检查环境变量
+            local env_var="${provider^^}_TOKEN"
+            if [[ -n "${!env_var}" ]]; then
+                echo -e "${GREEN}✓ 环境变量 \$$env_var${NC}"
+            else
+                echo -e "${YELLOW}⚠ 未配置 token (切换时会提示输入)${NC}"
+            fi
+        fi
+    fi
+
+    # 3. 检查 settings.json 是否与配置匹配
+    if [[ -f "$CONFIG_FILE" ]] && command -v jq >/dev/null 2>&1; then
+        local config_json=$(read_provider_config "$provider" 2>/dev/null)
+        if [[ -n "$config_json" ]]; then
+            local expected_model=$(echo "$config_json" | jq -r '.ANTHROPIC_DEFAULT_SONNET_MODEL // .ANTHROPIC_MODEL // empty' 2>/dev/null)
+            if [[ -n "$expected_model" ]]; then
+                local current_model=$(jq -r '.env.ANTHROPIC_DEFAULT_SONNET_MODEL // .env.ANTHROPIC_MODEL // empty' "$CONFIG_FILE" 2>/dev/null)
+                echo -n "  检查当前激活模型 ... "
+                if [[ "$current_model" == "$expected_model" ]]; then
+                    echo -e "${GREEN}✓ $current_model${NC}"
+                elif [[ -z "$current_model" ]]; then
+                    echo -e "${YELLOW}⚠ 未激活 (运行 'switch-claude $provider' 切换)${NC}"
+                else
+                    echo -e "${YELLOW}⚠ 当前: $current_model (期望: $expected_model)${NC}"
+                fi
+            fi
+        fi
+    fi
+
+    return 0
+}
+
+# 添加新的 provider
+add_provider() {
     local provider_name="$1"
     local env_config_json="$2"
+
+    # 无参模式：交互式创建
+    if [[ $# -eq 0 ]]; then
+        echo -e "${BLUE}交互式添加 provider${NC}"
+        echo ""
+
+        # 输入 provider 名称
+        while [[ -z "$provider_name" ]]; do
+            read -r -p "输入 provider 名称 (英文/数字): " provider_name
+            if [[ -z "$provider_name" ]]; then
+                echo -e "${RED}名称不能为空${NC}"
+            fi
+        done
+
+        # 输入 Base URL
+        local base_url=""
+        while [[ -z "$base_url" ]]; do
+            read -r -p "输入 Base URL (例如 https://api.custom.com/anthropic): " base_url
+            if [[ -z "$base_url" ]]; then
+                echo -e "${RED}Base URL 不能为空${NC}"
+            fi
+        done
+
+        # 输入模型名
+        local model=""
+        while [[ -z "$model" ]]; do
+            read -r -p "输入模型名 (例如 custom-model): " model
+            if [[ -z "$model" ]]; then
+                echo -e "${RED}模型名不能为空${NC}"
+            fi
+        done
+
+        # 是否设置其他模型字段
+        local sonnet_model="$model"
+        local haiku_model="$model"
+        local opus_model="$model"
+        read -r -p "单独设置 Sonnet 模型名? (留空则默认 \"$model\"): " input_sonnet
+        sonnet_model="${input_sonnet:-$sonnet_model}"
+        read -r -p "单独设置 Haiku 模型名? (留空则默认 \"$model\"): " input_haiku
+        haiku_model="${input_haiku:-$haiku_model}"
+        read -r -p "单独设置 Opus 模型名? (留空则默认 \"$model\"): " input_opus
+        opus_model="${input_opus:-$opus_model}"
+
+        # 额外环境变量
+        local extra_json="{}"
+        read -r -p "是否需要额外环境变量? (y/n): " has_extra
+        if [[ "$has_extra" =~ ^[Yy] ]]; then
+            echo "输入额外的环境变量 (每行一个 key=value，空行结束):"
+            local extra_lines=""
+            while true; do
+                read -r -p "  " line
+                [[ -z "$line" ]] && break
+                local key="${line%%=*}"
+                local val="${line#*=}"
+                if [[ "$key" != "$line" ]]; then
+                    extra_lines="$extra_lines\"$key\": \"$val\", "
+                fi
+            done
+            if [[ -n "$extra_lines" ]]; then
+                extra_lines="${extra_lines%, }"
+                extra_json="{ $extra_lines }"
+            fi
+        fi
+
+        # 构建 JSON
+        env_config_json=$(cat << JSONEOF
+{
+  "ANTHROPIC_BASE_URL": "$base_url",
+  "ANTHROPIC_AUTH_TOKEN": "",
+  "ANTHROPIC_MODEL": "$model",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL": "$sonnet_model",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL": "$haiku_model",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL": "$opus_model"
+}
+JSONEOF
+)
+        # 合并额外环境变量
+        if [[ "$extra_json" != "{}" ]]; then
+            env_config_json=$(echo "$env_config_json" "$extra_json" | jq -s '.[0] * .[1]' 2>/dev/null)
+        fi
+
+        echo ""
+        echo -e "${BLUE}即将添加 provider:${NC}"
+        echo "$env_config_json" | jq '.' 2>/dev/null || echo "$env_config_json"
+        echo ""
+        read -r -p "确认添加? (y/n): " confirm
+        if [[ ! "$confirm" =~ ^[Yy] ]]; then
+            echo "已取消"
+            return 0
+        fi
+    fi
+
+    if [[ -z "$env_config_json" ]]; then
+        echo -e "${RED}错误: 缺少配置 JSON${NC}"
+        echo "用法: switch-claude add-provider <provider_name> <env_config_json>"
+        return 1
+    fi
 
     # 1. 验证 provider 名称
     if ! validate_provider_name "$provider_name"; then
@@ -486,7 +668,7 @@ remove_provider() {
 
     # 不能删除内置 provider
     case "$provider" in
-        "glm"|"kimi"|"minimax")
+        "glm"|"kimi"|"minimax"|"deepseek")
             echo -e "${RED}错误: 不能删除内置 provider: $provider${NC}"
             return 1
             ;;
@@ -542,7 +724,7 @@ list_providers() {
         jq -r 'keys[]' "$PROVIDER_CONFIG_FILE" 2>/dev/null | while read -r p; do
             # 检查是否为内置 provider
             case "$p" in
-                "glm"|"kimi"|"minimax")
+                "glm"|"kimi"|"minimax"|"deepseek")
                     echo "  - $p (内置)"
                     ;;
                 *)
@@ -590,6 +772,75 @@ backup_config() {
         cp "$CONFIG_FILE" "$backup_file"
         echo -e "${YELLOW}已备份配置文件到 ${backup_file}${NC}"
     fi
+}
+
+# 从备份恢复配置
+restore_backup() {
+    local backup_dir="$CONFIG_DIR"
+    local backups=("$backup_dir"/settings.json.backup.*)
+
+    # 检查是否有备份文件
+    if [[ ! -e "${backups[0]}" ]]; then
+        echo -e "${RED}没有找到备份文件${NC}"
+        echo "备份目录: $backup_dir"
+        return 1
+    fi
+
+    # 列出所有备份
+    if [[ $# -eq 0 ]]; then
+        echo -e "${BLUE}可用备份:${NC}"
+        echo ""
+        local i=1
+        for backup in "${backups[@]}"; do
+            local basename=$(basename "$backup")
+            local timestamp="${basename#settings.json.backup.}"
+            local size=$(stat -f "%z" "$backup" 2>/dev/null || stat -c "%s" "$backup" 2>/dev/null)
+            echo "  [$i] $timestamp  ($(echo "scale=1; $size/1024" | bc 2>/dev/null)KB)"
+            i=$((i + 1))
+        done
+        echo ""
+        read -r -p "选择要恢复的备份编号 (或输入 q 取消): " choice
+        [[ "$choice" == "q" ]] && return 0
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le "${#backups[@]}" ]]; then
+            local idx=$((choice - 1))
+            local selected="${backups[$idx]}"
+        else
+            echo -e "${RED}无效选择${NC}"
+            return 1
+        fi
+    else
+        # 通过时间戳匹配
+        local target="$1"
+        local matched=""
+        for backup in "${backups[@]}"; do
+            local basename=$(basename "$backup")
+            local timestamp="${basename#settings.json.backup.}"
+            if [[ "$timestamp" == "$target" ]]; then
+                matched="$backup"
+                break
+            fi
+        done
+        if [[ -z "$matched" ]]; then
+            echo -e "${RED}未找到匹配的备份: $target${NC}"
+            echo "使用 'switch-claude restore' 查看可用备份"
+            return 1
+        fi
+        local selected="$matched"
+    fi
+
+    echo ""
+    echo -e "${YELLOW}将使用以下备份恢复:${NC}"
+    echo "  $(basename "$selected")"
+    read -r -p "确认恢复? (y/n): " confirm
+    if [[ ! "$confirm" =~ ^[Yy] ]]; then
+        echo "已取消"
+        return 0
+    fi
+
+    cp "$selected" "$CONFIG_FILE"
+    echo -e "${GREEN}已从备份恢复配置文件${NC}"
+    show_current
 }
 
 # 创建配置文件目录
@@ -917,82 +1168,7 @@ update_config() {
     fi
 }
 
-# GLM 配置
-switch_to_glm() {
-    local launch_claude="$1"
-    shift  # 移除第一个参数，剩余参数传递给 claude
-
-    # 从 provider.json 读取配置
-    local provider_config=$(read_provider_config "glm" 2>/dev/null)
-    if [[ $? -ne 0 ]] || [[ -z "$provider_config" ]]; then
-        echo -e "${RED}错误: 无法读取 GLM 配置${NC}"
-        echo ""
-        echo "请确保已运行: switch-claude init-provider-config"
-        return 1
-    fi
-
-    # 读取 token（优先级：Keychain > env > provider.json > prompt）
-    local token=$(read_token "glm")
-
-    # 解析配置并替换 token
-    local env_config=$(echo "$provider_config" | jq \
-        --arg token "$token" \
-        '.ANTHROPIC_AUTH_TOKEN = $token')
-
-    update_config "GLM" "$env_config" "$launch_claude" "$@"
-}
-
-# Kimi 配置
-switch_to_kimi() {
-    local launch_claude="$1"
-    shift  # 移除第一个参数，剩余参数传递给 claude
-
-    # 从 provider.json 读取配置
-    local provider_config=$(read_provider_config "kimi" 2>/dev/null)
-    if [[ $? -ne 0 ]] || [[ -z "$provider_config" ]]; then
-        echo -e "${RED}错误: 无法读取 Kimi 配置${NC}"
-        echo ""
-        echo "请确保已运行: switch-claude init-provider-config"
-        return 1
-    fi
-
-    # 读取 token（优先级：Keychain > env > provider.json > prompt）
-    local token=$(read_token "kimi")
-
-    # 解析配置并替换 token
-    local env_config=$(echo "$provider_config" | jq \
-        --arg token "$token" \
-        '.ANTHROPIC_AUTH_TOKEN = $token')
-
-    update_config "Kimi" "$env_config" "$launch_claude" "$@"
-}
-
-# Minimax 配置
-switch_to_minimax() {
-    local launch_claude="$1"
-    shift  # 移除第一个参数，剩余参数传递给 claude
-
-    # 从 provider.json 读取配置
-    local provider_config=$(read_provider_config "minimax" 2>/dev/null)
-    if [[ $? -ne 0 ]] || [[ -z "$provider_config" ]]; then
-        echo -e "${RED}错误: 无法读取 Minimax 配置${NC}"
-        echo ""
-        echo "请确保已运行: switch-claude init-provider-config"
-        return 1
-    fi
-
-    # 读取 token（优先级：Keychain > env > provider.json > prompt）
-    local token=$(read_token "minimax")
-
-    # 解析配置并替换 token
-    local env_config=$(echo "$provider_config" | jq \
-        --arg token "$token" \
-        '.ANTHROPIC_AUTH_TOKEN = $token')
-
-    update_config "Minimax" "$env_config" "$launch_claude" "$@"
-}
-
-# 通用 provider 切换函数（用于自定义 provider）
+# provider 切换函数（同时用于内置和自定义 provider）
 switch_to_provider() {
     local provider="$1"
     local launch_claude="$2"
@@ -1158,9 +1334,11 @@ Provider 管理选项:
   init-provider-config                初始化默认 provider.json
   show-provider-config                显示所有 provider 配置
   list-providers                      列出所有可用的 provider
-  add-provider <name> <config>        添加新的自定义 provider
+  add-provider                        <name> <config> 或交互式添加新 provider
+  verify                              [provider] 验证 provider 配置
   set-token <provider> <token>        为 provider 设置 token
   remove-provider <provider>          删除自定义 provider
+  restore                             [timestamp] 从备份恢复配置
 
 Token 管理选项:
   set-token <provider> <token>        设置 token 到 provider.json (推荐)
@@ -1176,6 +1354,7 @@ Token 管理选项:
 说明:
   - Token 优先级: Keychain > 环境变量 > provider.json
   - 每次切换前会自动备份当前配置
+  - 使用 'switch-claude restore' 可查看和恢复备份
   - Provider 配置文件位置: ~/.config/switch-claude/provider.json
   - 推荐使用 Keychain 存储 token 以提高安全性
 EOF
@@ -1201,9 +1380,11 @@ Provider 管理选项:
   init-provider-config                初始化默认 provider.json
   show-provider-config                显示所有 provider 配置
   list-providers                      列出所有可用的 provider
-  add-provider <name> <config>        添加新的自定义 provider
+  add-provider                        <name> <config> 或交互式添加新 provider
+  verify                              [provider] 验证 provider 配置
   set-token <provider> <token>        为 provider 设置 token (推荐) ⭐
   remove-provider <provider>          删除自定义 provider
+  restore                             [timestamp] 从备份恢复配置
 
 Token 管理选项:
   set-token <provider> <token>        设置 token 到 provider.json (推荐)
@@ -1220,6 +1401,7 @@ Token 管理选项:
 说明:
   - Ubuntu/Debian 等 Linux 系统不支持 macOS Keychain
   - 推荐使用 'set-token' 命令存储到配置文件
+  - 使用 'switch-claude restore' 可查看和恢复备份
   - Token 优先级: 环境变量 > provider.json > 提示输入
   - 每次切换前会自动备份当前配置
   - Provider 配置文件位置: ~/.config/switch-claude/provider.json
@@ -1254,9 +1436,11 @@ generate_dynamic_help() {
             echo "  init-provider-config   初始化默认 provider.json"
             echo "  show-provider-config   显示所有 provider 配置"
             echo "  list-providers         列出所有可用的 provider"
-            echo "  add-provider <name> <config>   添加新的自定义 provider"
+            echo "  add-provider           <name> <config> 或交互式添加"
+            echo "  verify                 [provider] 验证 provider 配置"
             echo "  set-token <provider> <token>   为 provider 设置 token"
             echo "  remove-provider <provider>     删除自定义 provider"
+            echo "  restore                [timestamp] 从备份恢复配置"
             echo ""
             echo "其他选项:"
             echo "  --system-info  显示系统信息"
@@ -1349,7 +1533,7 @@ main() {
 
     # Provider 管理命令（不使用 --launch 参数）
     case "${1:-}" in
-        "init-provider-config"|"show-provider-config"|"add-provider"|"set-token"|"remove-provider"|"list-providers")
+        "init-provider-config"|"show-provider-config"|"add-provider"|"set-token"|"remove-provider"|"list-providers"|"verify"|"restore")
             case "$1" in
                 "init-provider-config")
                     init_provider_config
@@ -1358,15 +1542,26 @@ main() {
                     show_provider_config
                     ;;
                 "add-provider")
-                    if [[ $# -ne 3 ]]; then
-                        echo -e "${RED}错误: add-provider 需要 2 个参数${NC}"
-                        echo "用法: switch-claude add-provider <provider_name> <env_config_json>"
+                    if [[ $# -eq 3 ]]; then
+                        add_provider "$2" "$3"
+                    elif [[ $# -eq 1 ]]; then
+                        add_provider
+                    else
+                        echo -e "${RED}错误: add-provider 需要 0 或 2 个参数${NC}"
+                        echo "用法:"
+                        echo "  switch-claude add-provider                             # 交互式创建"
+                        echo '  switch-claude add-provider <name> <config_json>       # 直接创建'
                         echo ""
                         echo "示例:"
-                        echo 'switch-claude add-provider MyProvider "{\"ANTHROPIC_AUTH_TOKEN\": \"\", \"ANTHROPIC_BASE_URL\": \"https://api.custom.com/anthropic\", \"ANTHROPIC_MODEL\": \"custom-model\"}"'
+                        echo '  switch-claude add-provider MyProvider "{\"ANTHROPIC_AUTH_TOKEN\": \"\", \"ANTHROPIC_BASE_URL\": \"https://api.custom.com/anthropic\", \"ANTHROPIC_MODEL\": \"custom-model\"}"'
                         return 1
                     fi
-                    add_provider "$2" "$3"
+                    ;;
+                "verify")
+                    verify_provider "$2"
+                    ;;
+                "restore")
+                    restore_backup "$2"
                     ;;
                 "set-token")
                     if [[ $# -ne 3 ]]; then
@@ -1475,20 +1670,8 @@ main() {
     done
 
     case "$model" in
-        "glm")
-            switch_to_glm "$launch_claude" "${claude_args[@]}"
-            if [[ "$launch_claude" != "true" ]]; then
-                show_current
-            fi
-            ;;
-        "kimi")
-            switch_to_kimi "$launch_claude" "${claude_args[@]}"
-            if [[ "$launch_claude" != "true" ]]; then
-                show_current
-            fi
-            ;;
-        "minimax")
-            switch_to_minimax "$launch_claude" "${claude_args[@]}"
+        "glm"|"kimi"|"minimax")
+            switch_to_provider "$model" "$launch_claude" "${claude_args[@]}"
             if [[ "$launch_claude" != "true" ]]; then
                 show_current
             fi
