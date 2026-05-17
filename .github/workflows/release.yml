@@ -152,7 +152,7 @@ jobs:
           cp "$FORMULA" "${FORMULA}.bak"
 
           # 只替换三个字段，保留 caveats/test 等完整内容
-          sed -i "s|^  url \".*\"|  url \"https://github.com/${{ github.repository }}/archive/v${VERSION}.tar.gz\"|" "$FORMULA"
+          sed -i "s|^  url \".*\"|  url \"https://github.com/${{ github.repository }}/archive/${TAG_NAME}.tar.gz\"|" "$FORMULA"
           sed -i "s|^  version \".*\"|  version \"${VERSION}\"|" "$FORMULA"
           sed -i "s|^  sha256 \".*\"|  sha256 \"${SHA256}\"|" "$FORMULA"
 
@@ -210,22 +210,4 @@ jobs:
             exit 1
           fi
 
-  notify:
-    needs: [release, update-formula]
-    runs-on: ubuntu-latest
-    if: always()
 
-    steps:
-      - name: Notify completion
-        run: |
-          if [[ "${{ needs.update-formula.result }}" == "success" ]]; then
-            echo "🎉 发布成功完成！"
-            echo "📦 版本: ${{ needs.release.outputs.version }}"
-            echo "🏷️  标签: ${{ needs.release.outputs.tag_name }}"
-            echo "📥 安装命令:"
-            echo "   brew tap yinzhenyu-su/homebrew-tools"
-            echo "   brew install switch-claude"
-          else
-            echo "❌ 发布过程中出现错误"
-            exit 1
-          fi
