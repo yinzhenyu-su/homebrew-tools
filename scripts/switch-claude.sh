@@ -177,7 +177,7 @@ validate_provider_name() {
     case "$name" in
         "glm"|"kimi"|"minimax")
             echo -e "${YELLOW}警告: '$name' 是内置 provider，建议使用其他名称${NC}"
-            read -p "确定要继续吗？(y/n): " confirm
+            read -r -p "确定要继续吗？(y/n): " confirm
             if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
                 return 1
             fi
@@ -282,7 +282,7 @@ init_provider_config() {
 
     if [[ -f "$PROVIDER_CONFIG_FILE" && "$force" != "true" ]]; then
         echo -e "${YELLOW}provider.json 已存在${NC}"
-        read -p "是否要重新创建？(会覆盖现有配置) (y/n): " confirm
+        read -r -p "是否要重新创建？(会覆盖现有配置) (y/n): " confirm
         if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
             echo "已取消"
             return 0
@@ -295,16 +295,21 @@ init_provider_config() {
     "ANTHROPIC_AUTH_TOKEN": "",
     "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
     "API_TIMEOUT_MS": "3000000",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-4.6",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-4.6"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5-turbo",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   },
   "kimi": {
     "ANTHROPIC_AUTH_TOKEN": "",
     "ANTHROPIC_BASE_URL": "https://api.moonshot.cn/anthropic",
-    "ANTHROPIC_MODEL": "kimi-k2-turbo-preview",
-    "ANTHROPIC_SMALL_FAST_MODEL": "kimi-k2-turbo-preview"
+    "ANTHROPIC_MODEL": "kimi-k2.5",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "kimi-k2.6",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "kimi-k2.6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "kimi-k2.6",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "kimi-k2.6",
+    "ENABLE_TOOL_SEARCH": "false",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   },
   "minimax": {
     "ANTHROPIC_AUTH_TOKEN": "",
@@ -315,7 +320,19 @@ init_provider_config() {
     "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "MiniMax-M2",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2"
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "MiniMax-M2",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+  },
+  "deepseek": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "API_TIMEOUT_MS": "600000",
+    "ANTHROPIC_MODEL": "deepseek-v4-flash[1m]",
+    "DISABLE_AUTOUPDATER": "1",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-flash[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-flash[1m]",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   }
 }
 EOF
@@ -487,7 +504,7 @@ remove_provider() {
     fi
 
     # 确认删除
-    read -p "确定要删除 provider '$provider' 吗？(y/n): " confirm
+    read -r -p "确定要删除 provider '$provider' 吗？(y/n): " confirm
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         echo "已取消"
         return 0
@@ -550,13 +567,13 @@ prompt_save_location() {
              set_token "$provider" "$token" 2>/dev/null)
     else
         # 降级到原生 bash read
-        read -p "保存到 Keychain? (推荐) (y/n): " save_choice
+        read -r -p "保存到 Keychain? (推荐) (y/n): " save_choice
         save_choice=${save_choice:-n}
 
         if [[ "$save_choice" =~ ^[Yy] ]]; then
             set_token_keychain "$provider" "$token" 2>/dev/null
         else
-            read -p "保存到配置文件? (y/n): " save_file_choice
+            read -r -p "保存到配置文件? (y/n): " save_file_choice
             save_file_choice=${save_file_choice:-n}
             if [[ "$save_file_choice" =~ ^[Yy] ]]; then
                 set_token "$provider" "$token" 2>/dev/null
@@ -632,7 +649,7 @@ prompt_for_token() {
     # 提示用户输入 token
     while [[ -z "$token" ]]; do
         # token=$(gum input --placeholder "请输入 $provider token")
-        read -p "请输入 $provider token: " token
+        read -r -p "请输入 $provider token: " token
         if [[ -z "$token" ]]; then
             echo -e "${RED}Token 不能为空，请重新输入${NC}"
         fi
@@ -1051,7 +1068,7 @@ clear_config() {
         echo ""
 
         # 询问用户确认
-        read -p "确定要继续清空所有配置吗？(输入 'yes' 确认): " confirm
+        read -r -p "确定要继续清空所有配置吗？(输入 'yes' 确认): " confirm
         if [[ "$confirm" != "yes" ]]; then
             echo -e "${YELLOW}已取消清空操作${NC}"
             return 0
