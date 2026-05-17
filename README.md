@@ -245,6 +245,37 @@ bash tests/run-all-tests.sh
 - [ ] 跨平台兼容性（macOS/Linux）
 - [ ] 更新相关文档
 
+### 发布流程
+
+本项目通过 GitHub Actions 自动处理 Homebrew Formula 的版本更新。
+
+**触发方式（二选一）：**
+
+1. **自动触发** — 推送一个 `v*` 格式的标签（如 `v2.1.0`）：
+
+   ```bash
+   git tag v2.1.0
+   git push origin v2.1.0
+   ```
+
+2. **手动触发** — 在 GitHub 仓库的 Actions 页面选择 `Release and Update Formula` 工作流，点击 `Run workflow` 并输入版本号。
+
+**发布前检查清单：**
+
+- [ ] 运行 `bash tests/run-all-tests.sh` 确认全部测试通过
+- [ ] 更新 `Formula/switch-claude.rb` 中的 caveats 文本（如有新命令）
+- [ ] 更新本 README（版本历史、用法示例等）
+- [ ] 确认 `.github/workflows/release.yml` 中公式模板与当前 `Formula/switch-claude.rb` 一致
+
+**发布后自动完成：**
+
+| 步骤 | 说明 |
+|---|---|
+| ① 创建 GitHub Release | 自动生成 changelog（基于 commit 历史） |
+| ② 计算 SHA256 | 从 GitHub Archive 下载 tarball 并计算校验和 |
+| ③ 更新 Formula | 只替换 `url`、`version`、`sha256` 三行，保留 caveats/test 内容 |
+| ④ 提交并推送 | 自动 commit 到 `main` 分支，用户直接 `brew upgrade` 即可获取更新 |
+
 ## 🗑️ 卸载
 
 ```bash
