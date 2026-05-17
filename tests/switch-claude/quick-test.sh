@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SWITCH_SCRIPT="$SCRIPT_DIR/../scripts/switch-claude.sh"
+SWITCH_SCRIPT="$SCRIPT_DIR/../../scripts/switch-claude.sh"
 
 # 隔离测试路径，避免修改用户真实配置
 export SWITCH_CLAUDE_CONFIG_DIR="${SWITCH_CLAUDE_CONFIG_DIR:-$(mktemp -d /tmp/switch-claude-test-XXXX)}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 运行所有测试套件
-# 快速测试、错误处理测试、集成测试
+# 自动发现 tests/*/ 子目录中的测试脚本
 
 set -e
 
@@ -14,9 +14,29 @@ MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QUICK_TEST="$SCRIPT_DIR/quick-test.sh"
-ERROR_TEST="$SCRIPT_DIR/test-errors.sh"
-INTEGRATION_TEST="$SCRIPT_DIR/test-integration.sh"
+
+# 自动发现测试套件：从 tests/*/ 子目录中收集 test-*.sh 或 quick-test.sh 等脚本
+declare -a TEST_SUITES=()     # 描述
+declare -a TEST_SCRIPTS=()    # 脚本路径
+
+discover_test_suites() {
+    TEST_SUITES=()
+    TEST_SCRIPTS=()
+
+    for tool_dir in "$SCRIPT_DIR"/*/; do
+        [[ -d "$tool_dir" ]] || continue
+        local tool_name
+        tool_name=$(basename "$tool_dir")
+
+        for script in "$tool_dir"/*.sh; do
+            [[ -f "$script" ]] || continue
+            local script_name
+            script_name=$(basename "$script" .sh)
+            TEST_SUITES+=("${tool_name}: ${script_name}")
+            TEST_SCRIPTS+=("$script")
+        done
+    done
+}
 
 # 全局测试计数器
 TOTAL_TESTS=0
@@ -54,13 +74,10 @@ show_banner() {
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════════════════════╗"
     echo "║                                                              ║"
-    echo "║          Switch Claude 测试套件                              ║"
+    echo "║          Homebrew Tools 测试套件                             ║"
     echo "║                                                              ║"
     echo "║  1. 运行所有测试 (推荐)                                       ║"
-    echo "║  2. 仅运行快速测试                                           ║"
-    echo "║  3. 仅运行错误测试                                           ║"
-    echo "║  4. 仅运行集成测试                                           ║"
-    echo "║  5. 自定义选择                                               ║"
+    echo "║  2. 选择测试套件                                             ║"
     echo "║                                                              ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -124,7 +141,7 @@ generate_report() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Switch Claude 测试报告</title>
+    <title>Homebrew Tools 测试报告</title>
     <style>
         * {
             margin: 0;
@@ -224,33 +241,6 @@ generate_report() {
             font-weight: bold;
             transition: width 1s ease;
         }
-        .test-details {
-            margin-top: 30px;
-        }
-        .test-item {
-            background: #f8f9fa;
-            border-left: 4px solid #007bff;
-            padding: 20px;
-            margin-bottom: 15px;
-            border-radius: 8px;
-        }
-        .test-item h4 {
-            color: #333;
-            margin-bottom: 10px;
-        }
-        .test-item ul {
-            list-style: none;
-            padding-left: 0;
-        }
-        .test-item li {
-            padding: 5px 0;
-            color: #666;
-        }
-        .test-item li::before {
-            content: "▸ ";
-            color: #007bff;
-            font-weight: bold;
-        }
         .footer {
             background: #f8f9fa;
             padding: 20px 40px;
@@ -268,7 +258,7 @@ generate_report() {
     <div class="container">
         <div class="header">
             <h1>🧪 测试报告</h1>
-            <p>Switch Claude 功能测试详细结果</p>
+            <p>Homebrew Tools 测试详细结果</p>
         </div>
         <div class="content">
             <div class="summary">
@@ -298,53 +288,13 @@ generate_report() {
                     </div>
                 </div>
             </div>
-
-            <div class="test-details">
-                <h2 style="margin-bottom: 20px;">测试详情</h2>
-
-                <div class="test-item">
-                    <h4>📋 快速功能测试</h4>
-                    <ul>
-                        <li>验证基本命令和功能</li>
-                        <li>测试 provider.json 自动创建</li>
-                        <li>测试自定义 provider 添加/删除</li>
-                        <li>测试 token 管理功能</li>
-                        <li>测试模型切换功能</li>
-                    </ul>
-                </div>
-
-                <div class="test-item">
-                    <h4>⚠️ 错误处理测试</h4>
-                    <ul>
-                        <li>测试损坏的 JSON 文件</li>
-                        <li>测试无效的 provider 名称</li>
-                        <li>测试无效的 JSON 配置</li>
-                        <li>测试各种错误场景</li>
-                        <li>测试依赖检查</li>
-                    </ul>
-                </div>
-
-                <div class="test-item">
-                    <h4>🔄 集成测试</h4>
-                    <ul>
-                        <li>首次使用完整流程</li>
-                        <li>自定义 provider 完整流程</li>
-                        <li>Token 优先级验证</li>
-                        <li>完整模型切换工作流</li>
-                        <li>Keychain 管理功能</li>
-                        <li>配置恢复场景</li>
-                        <li>批量操作场景</li>
-                    </ul>
-                </div>
-            </div>
         </div>
         <div class="footer">
             <p>测试报告生成时间: <span class="timestamp">TIMESTAMP_VAR</span></p>
-            <p style="margin-top: 10px;">Switch Claude</p>
+            <p style="margin-top: 10px;">Homebrew Tools</p>
         </div>
     </div>
     <script>
-        // 动画效果
         window.addEventListener('load', function() {
             const progressFill = document.querySelector('.progress-fill');
             const width = progressFill.style.width;
@@ -366,10 +316,7 @@ EOF
 
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # 使用 | 作为分隔符，并处理 macOS sed -i 的扩展名参数
-    # 在 macOS 上，sed -i 需要扩展名（即使是空扩展名）
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS sed
         sed -i '' "s|TOTAL_TESTS_VAR|$TOTAL_TESTS|g" "$report_file"
         sed -i '' "s|PASSED_TESTS_VAR|$TOTAL_PASSED|g" "$report_file"
         sed -i '' "s|FAILED_TESTS_VAR|$TOTAL_FAILED|g" "$report_file"
@@ -377,7 +324,6 @@ EOF
         sed -i '' "s|PASS_PERCENT_VAR|$pass_percent|g" "$report_file"
         sed -i '' "s|TIMESTAMP_VAR|$timestamp|g" "$report_file"
     else
-        # Linux sed
         sed -i "s|TOTAL_TESTS_VAR|$TOTAL_TESTS|g" "$report_file"
         sed -i "s|PASSED_TESTS_VAR|$TOTAL_PASSED|g" "$report_file"
         sed -i "s|FAILED_TESTS_VAR|$TOTAL_FAILED|g" "$report_file"
@@ -391,46 +337,49 @@ EOF
 
 # 主函数
 main() {
+    discover_test_suites
+
     show_banner
 
-    # 等待用户按键或自动运行
+    local total_suites=${#TEST_SUITES[@]}
+
+    if [[ $total_suites -eq 0 ]]; then
+        echo -e "${RED}错误: 未找到测试套件${NC}"
+        echo "请确保 tests/ 目录下有子目录包含 .sh 测试脚本"
+        exit 1
+    fi
+
     echo ""
-    read -p "请选择 [1-5]: " choice
+    read -p "请选择 [1-2]: " choice
 
     case "$choice" in
         1)
             echo -e "\n${GREEN}运行所有测试...${NC}\n"
-            run_test_suite "快速功能测试" "$QUICK_TEST" "验证基本功能和命令"
-            run_test_suite "错误处理测试" "$ERROR_TEST" "验证各种错误场景"
-            run_test_suite "集成测试" "$INTEGRATION_TEST" "验证完整工作流程"
+            for i in "${!TEST_SCRIPTS[@]}"; do
+                run_test_suite "${TEST_SUITES[$i]}" "${TEST_SCRIPTS[$i]}" ""
+            done
             ;;
         2)
-            echo -e "\n${GREEN}运行快速测试...${NC}\n"
-            run_test_suite "快速功能测试" "$QUICK_TEST" "验证基本功能和命令"
-            ;;
-        3)
-            echo -e "\n${GREEN}运行错误测试...${NC}\n"
-            run_test_suite "错误处理测试" "$ERROR_TEST" "验证各种错误场景"
-            ;;
-        4)
-            echo -e "\n${GREEN}运行集成测试...${NC}\n"
-            run_test_suite "集成测试" "$INTEGRATION_TEST" "验证完整工作流程"
-            ;;
-        5)
-            echo -e "\n${GREEN}自定义选择...${NC}\n"
-            read -p "运行快速测试? [y/N]: " run_quick
-            read -p "运行错误测试? [y/N]: " run_error
-            read -p "运行集成测试? [y/N]: " run_integration
+            echo ""
+            for i in "${!TEST_SUITES[@]}"; do
+                echo -e "  $((i+1))). ${TEST_SUITES[$i]}"
+            done
+            echo ""
+            read -p "请选择 [1-$total_suites]: " suite_choice
 
-            [[ "$run_quick" =~ ^[Yy] ]] && run_test_suite "快速功能测试" "$QUICK_TEST" "验证基本功能和命令"
-            [[ "$run_error" =~ ^[Yy] ]] && run_test_suite "错误处理测试" "$ERROR_TEST" "验证各种错误场景"
-            [[ "$run_integration" =~ ^[Yy] ]] && run_test_suite "集成测试" "$INTEGRATION_TEST" "验证完整工作流程"
+            if [[ "$suite_choice" =~ ^[0-9]+$ ]] && (( suite_choice >= 1 && suite_choice <= total_suites )); then
+                local idx=$((suite_choice - 1))
+                run_test_suite "${TEST_SUITES[$idx]}" "${TEST_SCRIPTS[$idx]}" ""
+            else
+                echo -e "${RED}无效选择${NC}"
+                exit 1
+            fi
             ;;
         *)
-            echo -e "${YELLOW}自动运行所有测试...${NC}\n"
-            run_test_suite "快速功能测试" "$QUICK_TEST" "验证基本功能和命令"
-            run_test_suite "错误处理测试" "$ERROR_TEST" "验证各种错误场景"
-            run_test_suite "集成测试" "$INTEGRATION_TEST" "验证完整工作流程"
+            echo -e "${YELLOW}运行所有测试...${NC}\n"
+            for i in "${!TEST_SCRIPTS[@]}"; do
+                run_test_suite "${TEST_SUITES[$i]}" "${TEST_SCRIPTS[$i]}" ""
+            done
             ;;
     esac
 

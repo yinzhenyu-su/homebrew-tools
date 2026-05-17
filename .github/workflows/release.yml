@@ -4,8 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+      - '*-v*'
   workflow_dispatch:
     inputs:
+      tool:
+        description: 'Tool name (e.g., switch-claude)'
+        required: true
+        type: string
       version:
         description: 'Version to release (e.g., 1.1.0)'
         required: true
@@ -19,8 +24,9 @@ jobs:
       pull-requests: write
 
     outputs:
-      tag_name: ${{ steps.tag.outputs.tag_name }}
-      version: ${{ steps.tag.outputs.version }}
+      tool: ${{ steps.detect.outputs.tool }}
+      tag_name: ${{ steps.detect.outputs.tag_name }}
+      version: ${{ steps.detect.outputs.version }}
 
     steps:
       - name: Checkout code
@@ -33,48 +39,59 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-      - name: Determine version and tag
-        id: tag
+      - name: Detect tool and version from tag or input
+        id: detect
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TOOL="${{ github.event.inputs.tool }}"
             VERSION="${{ github.event.inputs.version }}"
-            TAG_NAME="v${VERSION}"
+            TAG_NAME="${TOOL}-v${VERSION}"
           else
             TAG_NAME="${{ github.ref_name }}"
-            VERSION="${TAG_NAME#v}"
+            # Try prefix-vXX format first, fall back to plain vXX (assume switch-claude)
+            if [[ "$TAG_NAME" =~ ^(.+)-v([0-9]+\.[0-9]+\.[0-9]+.*)$ ]]; then
+              TOOL="${BASH_REMATCH[1]}"
+              VERSION="${BASH_REMATCH[2]}"
+            else
+              TOOL="switch-claude"
+              VERSION="${TAG_NAME#v}"
+            fi
           fi
 
+          echo "tool=${TOOL}" >> $GITHUB_OUTPUT
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Tag: ${TAG_NAME}, Version: ${VERSION}"
+          echo "Tool: ${TOOL}, Version: ${VERSION}, Tag: ${TAG_NAME}"
 
       - name: Create tag (workflow_dispatch only)
         if: github.event_name == 'workflow_dispatch'
         run: |
-          TAG_NAME="${{ steps.tag.outputs.tag_name }}"
-          git tag "${TAG_NAME}"
-          git push origin "${TAG_NAME}"
+          git tag "${{ steps.detect.outputs.tag_name }}"
+          git push origin "${{ steps.detect.outputs.tag_name }}"
 
       - name: Generate changelog
         id: changelog
         run: |
+          TOOL="${{ steps.detect.outputs.tool }}"
+          TAG_NAME="${{ steps.detect.outputs.tag_name }}"
+          VERSION="${{ steps.detect.outputs.version }}"
+
           PREVIOUS_TAG=$(git tag --sort=-version:refname | head -2 | tail -1)
           if [[ -z "$PREVIOUS_TAG" ]]; then
             PREVIOUS_TAG=$(git rev-list --max-parents=0 HEAD)
           fi
 
           CHANGELOG=$(mktemp)
-          echo "## 🚀 What's New in ${{ steps.tag.outputs.version }}" >> "$CHANGELOG"
+          echo "## 🚀 What's New in ${TOOL} ${VERSION}" >> "$CHANGELOG"
           echo "" >> "$CHANGELOG"
-          git log --pretty=format:"- %s" "${PREVIOUS_TAG}..${{ steps.tag.outputs.tag_name }}" | head -20 >> "$CHANGELOG"
+          git log --pretty=format:"- %s" "${PREVIOUS_TAG}..${TAG_NAME}" | head -20 >> "$CHANGELOG"
           echo "" >> "$CHANGELOG"
           echo "## 📋 Installation" >> "$CHANGELOG"
           echo '```bash' >> "$CHANGELOG"
           echo 'brew tap yinzhenyu-su/homebrew-tools' >> "$CHANGELOG"
-          echo 'brew install switch-claude' >> "$CHANGELOG"
+          echo "brew install ${TOOL}" >> "$CHANGELOG"
           echo '```' >> "$CHANGELOG"
 
-          # Use a delimiter that won't appear in content
           echo "CHANGELOG<<GHA_EOF" >> $GITHUB_OUTPUT
           cat "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "GHA_EOF" >> $GITHUB_OUTPUT
@@ -83,8 +100,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag_name }}
-          name: "Switch Claude ${{ steps.tag.outputs.version }}"
+          tag_name: ${{ steps.detect.outputs.tag_name }}
+          name: "${{ steps.detect.outputs.tool }} ${{ steps.detect.outputs.version }}"
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           draft: false
           prerelease: false
@@ -105,6 +122,7 @@ jobs:
       - name: Download and calculate SHA256
         id: sha256
         run: |
+          TOOL="${{ needs.release.outputs.tool }}"
           TAG_NAME="${{ needs.release.outputs.tag_name }}"
           VERSION="${{ needs.release.outputs.version }}"
 
@@ -120,9 +138,15 @@ jobs:
 
       - name: Update Formula (version + url + sha256 only)
         run: |
+          TOOL="${{ needs.release.outputs.tool }}"
           VERSION="${{ needs.release.outputs.version }}"
           SHA256="${{ steps.sha256.outputs.sha256 }}"
-          FORMULA="Formula/switch-claude.rb"
+          FORMULA="Formula/${TOOL}.rb"
+
+          if [[ ! -f "$FORMULA" ]]; then
+            echo "错误: Formula 文件不存在: $FORMULA"
+            exit 1
+          fi
 
           # 备份
           cp "$FORMULA" "${FORMULA}.bak"
@@ -133,23 +157,25 @@ jobs:
           sed -i "s|^  sha256 \".*\"|  sha256 \"${SHA256}\"|" "$FORMULA"
 
           echo "Formula 已更新:"
+          echo "  Formula: ${FORMULA}"
           echo "  版本: ${VERSION}"
           echo "  SHA256: ${SHA256}"
 
       - name: Verify Formula syntax
         run: |
-          ruby -c "Formula/switch-claude.rb"
+          ruby -c "Formula/${{ needs.release.outputs.tool }}.rb"
           echo "✅ Formula 语法正确"
 
       - name: Commit and push changes
         run: |
+          TOOL="${{ needs.release.outputs.tool }}"
           VERSION="${{ needs.release.outputs.version }}"
-          FORMULA="Formula/switch-claude.rb"
+          FORMULA="Formula/${TOOL}.rb"
 
           git add "$FORMULA"
 
           if ! git diff --staged --quiet; then
-            git commit -m "chore: update switch-claude to v${VERSION}
+            git commit -m "chore: update ${TOOL} to v${VERSION}
 
             - Update version to ${VERSION}
             - Update SHA256 hash
@@ -161,6 +187,27 @@ jobs:
             echo "✅ Formula 更新已提交并推送"
           else
             echo "ℹ️  无变更需要提交"
+          fi
+
+  notify:
+    needs: [release, update-formula]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Notify completion
+        run: |
+          if [[ "${{ needs.update-formula.result }}" == "success" ]]; then
+            echo "🎉 发布成功完成！"
+            echo "📦 工具: ${{ needs.release.outputs.tool }}"
+            echo "📦 版本: ${{ needs.release.outputs.version }}"
+            echo "🏷️  标签: ${{ needs.release.outputs.tag_name }}"
+            echo "📥 安装命令:"
+            echo "   brew tap yinzhenyu-su/homebrew-tools"
+            echo "   brew install ${{ needs.release.outputs.tool }}"
+          else
+            echo "❌ 发布过程中出现错误"
+            exit 1
           fi
 
   notify:

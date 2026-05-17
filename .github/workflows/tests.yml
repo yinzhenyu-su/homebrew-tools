@@ -1,4 +1,4 @@
-name: brew test-bot
+name: Tests
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  test-bot:
+  brew-test-bot:
     strategy:
       matrix:
         os: [ ubuntu-22.04, macos-13, macos-14 ]
@@ -51,3 +51,24 @@ jobs:
         with:
           name: bottles_${{ matrix.os }}
           path: '*.bottle.*'
+
+  shell-tests:
+    strategy:
+      matrix:
+        os: [ ubuntu-22.04, macos-13, macos-14 ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install jq
+          else
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+
+      - name: Run all tool test suites
+        run: |
+          CI=true bash tests/run-all-tests.sh

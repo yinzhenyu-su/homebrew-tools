@@ -1,6 +1,6 @@
 # homebrew-tools
 
-Claude Code 模型切换工具（switch-claude）的 Homebrew tap 仓库。
+Homebrew tap 仓库。包含 Claude Code 模型切换工具（switch-claude）等多个工具的 Formulae。
 
 ## 核心记忆层（不变约束）
 
@@ -30,35 +30,45 @@ export SWITCH_CLAUDE_SETTINGS="$SWITCH_CLAUDE_CONFIG_DIR/settings.json"
 ```
 更新 caveats → Formula 版本号 → 提交 → git tag vX.Y.Z → git push origin vX.Y.Z
 ```
-GitHub Actions 自动处理：Release 创建 → SHA 校验 → Formula 三行替换 → 自动 commit。
+`vX.Y.Z` 默认对应 switch-claude。其他工具用 `工具名-vX.Y.Z` 格式（如 `my-tool-v1.0.0`）。GitHub Actions 自动按 tag 前缀识别工具 → 创建 Release → 计算 SHA → 替换 Formula 三行 → 自动 commit。
 
 ### 新增命令
 ```
 help() 注册 → dispatch 分支 → 独立函数实现 → Formula caveats → 测试用例
 ```
 
+### 扩展新工具
+```
+scripts/ 加脚本 → Formula/ 加 .rb → tests/ 加同名子目录 → 工具名-vX.Y.Z 发版
+```
+`tests/` 下只需创建工具同名目录并放入 `.sh` 测试脚本，`run-all-tests.sh` 自动发现。
+
 ## 执行层（可复用操作）
 
 ### 运行测试
 ```bash
 bash tests/run-all-tests.sh          # 全部测试
-bash tests/quick-test.sh             # 快速功能测试 (29 cases)
-bash tests/test-errors.sh            # 错误处理测试 (24 cases)
-bash tests/test-integration.sh       # 集成测试 (9 scenarios)
-CI=true bash tests/quick-test.sh     # CI 模式（跳过交互）
+bash tests/switch-claude/quick-test.sh             # 快速功能测试 (29 cases)
+bash tests/switch-claude/test-errors.sh            # 错误处理测试 (24 cases)
+bash tests/switch-claude/test-integration.sh       # 集成测试 (9 scenarios)
+CI=true bash tests/switch-claude/quick-test.sh     # CI 模式（跳过交互）
 ```
 
 ### 项目结构
 ```
-scripts/switch-claude.sh   # 主脚本 (~1710 行)
-Formula/switch-claude.rb   # Homebrew Formula
+scripts/
+  switch-claude.sh         # switch-claude 主脚本
+Formula/
+  switch-claude.rb         # switch-claude Homebrew Formula
 tests/
-  quick-test.sh            # 功能测试
-  test-errors.sh           # 异常测试
-  test-integration.sh      # 集成场景
+  run-all-tests.sh         # 自动发现 tests/*/ 子目录测试
+  switch-claude/
+    quick-test.sh          # 功能测试 (29 cases)
+    test-errors.sh         # 异常测试 (24 cases)
+    test-integration.sh    # 集成测试 (9 scenarios)
 .github/workflows/
-  release.yml              # 发布工作流
-  tests.yml                # CI 测试
+  release.yml              # 发布工作流（tag 前缀 → 多 formula）
+  tests.yml                # CI 测试（brew test-bot + shell 测试）
 ```
 
 ### 调试快速参考

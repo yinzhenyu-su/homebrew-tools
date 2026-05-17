@@ -183,34 +183,30 @@ sc kimi                  # 等同于 switch-claude kimi
 ### 运行测试套件
 
 ```bash
-# 运行所有测试
-bash tests/run-all-tests.sh
+# 运行所有测试（自动发现 tests/*/ 子目录）
+CI=true bash tests/run-all-tests.sh
 
-# 运行快速测试（适用于 macOS/Linux）
-bash tests/quick-test.sh
-
-# 运行错误处理测试
-bash tests/test-errors.sh
-
-# 运行集成测试
-bash tests/test-integration.sh
+# 运行特定测试
+bash tests/switch-claude/quick-test.sh
+bash tests/switch-claude/test-errors.sh
+bash tests/switch-claude/test-integration.sh
 ```
 
-运行 `tests/run-all-tests.sh` 时会先显示测试菜单，可通过 `printf '1\n' | bash tests/run-all-tests.sh` 在 CI 场景中直接选择“运行所有测试”。
+测试按工具分目录组织，`tests/run-all-tests.sh` 会自动发现所有 `tests/*/` 子目录中的测试脚本。
 
 ### 测试内容概览
 
-- **quick-test.sh**: 覆盖帮助信息、默认配置生成、provider 管理、Keychain 操作与模型切换等基础行为。
-- **test-errors.sh**: 构造非法 JSON、无效参数、缺失依赖等异常场景，验证错误提示是否准确。
-- **test-integration.sh**: 以七个端到端场景模拟真实使用流程（首次初始化、自定义 provider、Token 优先级、批量操作等）。
+- **switch-claude/quick-test.sh**: 覆盖帮助信息、默认配置生成、provider 管理、Keychain 操作与模型切换等基础行为 (29 cases)。
+- **switch-claude/test-errors.sh**: 构造非法 JSON、无效参数、缺失依赖等异常场景，验证错误提示是否准确 (24 cases)。
+- **switch-claude/test-integration.sh**: 以九个端到端场景模拟真实使用流程（首次初始化、自定义 provider、Token 优先级、verify/restore 等）。
 - **test-report.html**: `run-all-tests.sh` 结束后生成的可视化报告，包含统计概览和时间戳。
 
 ### 测试亮点
 
+- ✅ 自动发现 `tests/*/` 子目录，新增工具只需创建新目录。
 - ✅ 自动检测操作系统并在不支持的功能上回退或跳过。
-- ✅ 对 token、配置文件和 Keychain 的读写进行了大量断言，覆盖 50+ 关键检查点。
-- ✅ 所有脚本在测试结束时清理环境，避免污染用户配置。
-- ✅ 支持在 macOS 上完整验证 Keychain 流程，在其它平台输出替代建议。
+- ✅ 对 token、配置文件和 Keychain 的读写进行了大量断言，覆盖 60+ 关键检查点。
+- ✅ 所有脚本通过 `SWITCH_CLAUDE_CONFIG_DIR` / `SWITCH_CLAUDE_SETTINGS` 隔离临时目录，避免污染用户真实配置。
 
 ## 👨‍💻 开发
 
@@ -240,10 +236,19 @@ bash tests/run-all-tests.sh
 
 提交 PR 前请确保：
 
-- [ ] 运行完整测试套件：`bash tests/run-all-tests.sh`
-- [ ] 确认 quick/errors/integration 三个脚本全部通过
+- [ ] 运行完整测试套件：`CI=true bash tests/run-all-tests.sh`
+- [ ] 确认各工具子目录下的测试全部通过
 - [ ] 跨平台兼容性（macOS/Linux）
 - [ ] 更新相关文档
+
+### 扩展新工具
+
+添加新的 Homebrew formula 项目时：
+
+1. 在 `scripts/` 中放置主脚本
+2. 在 `Formula/` 中创建对应的 `.rb` 文件
+3. 在 `tests/` 中创建工具同名子目录，放入测试脚本
+4. 发布时使用 `工具名-v版本号` 格式的 tag（如 `my-tool-v1.0.0`），release workflow 自动适配
 
 ### 发布流程
 
@@ -251,21 +256,25 @@ bash tests/run-all-tests.sh
 
 **触发方式（二选一）：**
 
-1. **自动触发** — 推送一个 `v*` 格式的标签（如 `v2.1.0`）：
-
+1. **自动触发** — 推送标签，支持两种格式：
    ```bash
+   # 默认工具（switch-claude）：v版本号
    git tag v2.1.0
    git push origin v2.1.0
+
+   # 其他工具：工具名-v版本号
+   git tag my-tool-v1.0.0
+   git push origin my-tool-v1.0.0
    ```
 
-2. **手动触发** — 在 GitHub 仓库的 Actions 页面选择 `Release and Update Formula` 工作流，点击 `Run workflow` 并输入版本号。
+2. **手动触发** — 在 GitHub 仓库的 Actions 页面选择 `Release and Update Formula` 工作流，点击 `Run workflow` 并输入工具名和版本号。
 
 **发布前检查清单：**
 
 - [ ] 运行 `bash tests/run-all-tests.sh` 确认全部测试通过
 - [ ] 更新 `Formula/switch-claude.rb` 中的 caveats 文本（如有新命令）
 - [ ] 更新本 README（版本历史、用法示例等）
-- [ ] 确认 `.github/workflows/release.yml` 中公式模板与当前 `Formula/switch-claude.rb` 一致
+- [ ] 确认 `Formula/` 下每个 `.rb` 文件的 caveats 与当前命令列表一致
 
 **发布后自动完成：**
 
@@ -292,7 +301,7 @@ MIT License
 - [Claude Code 官方文档](https://docs.anthropic.com/claude/docs)
 - [Homebrew 官方文档](https://docs.brew.sh/)
 - [项目 Issues](https://github.com/yinzhenyu-su/homebrew-tools/issues)
-- [测试套件文档](tests/README.md)
+- [测试套件文档](tests/switch-claude/README.md)
 
 ## 📊 版本历史
 
