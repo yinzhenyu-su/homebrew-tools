@@ -157,6 +157,7 @@ jobs:
           cp "$FORMULA" "${FORMULA}.bak"
 
           # 只替换三个字段，保留 caveats/test 等完整内容
+          TAG_NAME="${{ needs.release.outputs.tag_name }}"
           sed -i "s|^  url \".*\"|  url \"https://github.com/${{ github.repository }}/archive/${TAG_NAME}.tar.gz\"|" "$FORMULA"
           sed -i "s|^  version \".*\"|  version \"${VERSION}\"|" "$FORMULA"
           sed -i "s|^  sha256 \".*\"|  sha256 \"${SHA256}\"|" "$FORMULA"
