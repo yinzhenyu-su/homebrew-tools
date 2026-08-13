@@ -350,7 +350,13 @@ main() {
     fi
 
     echo ""
-    read -p "请选择 [1-2]: " choice
+    # 非交互/CI 环境（stdin 非终端或设置了 CI=true）跳过菜单直接运行全部测试。
+    # read 在 stdin EOF 时返回非零，需 `|| true` 避免触发 set -e（此前 CI 模式从未真正生效）
+    if [[ -n "${CI:-}" ]] || [[ ! -t 0 ]]; then
+        choice="1"
+    else
+        read -p "请选择 [1-2]: " choice || true
+    fi
 
     case "$choice" in
         1)
@@ -365,7 +371,7 @@ main() {
                 echo -e "  $((i+1))). ${TEST_SUITES[$i]}"
             done
             echo ""
-            read -p "请选择 [1-$total_suites]: " suite_choice
+            read -p "请选择 [1-$total_suites]: " suite_choice || true
 
             if [[ "$suite_choice" =~ ^[0-9]+$ ]] && (( suite_choice >= 1 && suite_choice <= total_suites )); then
                 local idx=$((suite_choice - 1))
