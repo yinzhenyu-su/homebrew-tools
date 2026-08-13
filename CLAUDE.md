@@ -1,6 +1,6 @@
 # homebrew-tools
 
-Homebrew tap 仓库。包含 Claude Code 模型切换工具（switch-claude）等多个工具的 Formulae。
+Homebrew tap 仓库。包含 switch-claude（Claude Code 模型切换）与 adb-qr-pair（adb 无线调试二维码配对）等工具的 Formulae。
 
 ## 核心记忆层（不变约束）
 
@@ -50,19 +50,28 @@ scripts/ 加脚本 → Formula/ 加 .rb → tests/ 加同名子目录 → 工具
 bash tests/run-all-tests.sh          # 全部测试
 bash tests/switch-claude/test-errors.sh            # 错误处理测试 (26 cases)
 bash tests/switch-claude/test-integration.sh       # 集成测试 (9 scenarios)
+bash tests/adb-qr-pair/test-errors.sh              # adb-qr-pair 错误处理测试 (5 cases)
 ```
 
 ### 项目结构
 ```
 scripts/
   switch-claude.sh         # switch-claude 主脚本
+  adb-qr-pair.sh           # adb-qr-pair 主脚本 (二维码配对 adb 无线调试)
 Formula/
   switch-claude.rb         # switch-claude Homebrew Formula
+  adb-qr-pair.rb           # adb-qr-pair Homebrew Formula
 tests/
   run-all-tests.sh         # 自动发现 tests/*/ 子目录测试
   switch-claude/
     test-errors.sh         # 异常测试 (26 cases)
     test-integration.sh    # 集成测试 (9 scenarios)
+  adb-qr-pair/
+    test-errors.sh         # 错误处理测试 (缺依赖分支)
+docs/
+  switch-claude/usage.md   # switch-claude 使用指南
+  adb-qr-pair/usage.md     # adb-qr-pair 使用指南
+  DEVELOPMENT.md           # 开发与维护（测试、发布流程）
 .github/workflows/
   release.yml              # 发布工作流（tag 前缀 → 多 formula）
   tests.yml                # CI 测试（brew test-bot + shell 测试）
@@ -70,5 +79,6 @@ tests/
 
 ### 调试快速参考
 - `bash -n scripts/switch-claude.sh` — 语法检查
-- `ruby -c Formula/switch-claude.rb` — Formula 语法检查
-- 验证发布：`git archive --format=tar.gz --prefix=homebrew-tools-X.Y.Z/ vX.Y.Z | shasum -a 256`
+- `sh -n scripts/adb-qr-pair.sh` — 语法检查 (POSIX sh)
+- `ruby -c Formula/*.rb` — Formula 语法检查
+- sha256 由 release workflow 从 GitHub 实际 tarball 计算并 sed 替换；勿用本地 `git archive | shasum` 计算（gzip 流与 GitHub 不一致）
