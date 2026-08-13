@@ -70,7 +70,8 @@ parse_test_results() {
 
 # 显示横幅
 show_banner() {
-    clear
+    # CI 环境无 TERM 时 clear 会报错, 需容错避免触发 set -e
+    clear 2>/dev/null || true
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════════════════════╗"
     echo "║                                                              ║"
