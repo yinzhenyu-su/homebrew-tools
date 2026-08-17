@@ -12,10 +12,13 @@
 #
 # 依赖: qrencode (brew install qrencode), dns-sd (macOS 自带) 或 avahi-utils (Linux)
 # 超时控制: Linux 用 coreutils 的 timeout (无需 perl); macOS 没有 timeout, 用自带 perl
-# 用法: ./scripts/adb-qr-pair.sh
+# 用法: ./scripts/adb-qr-pair.sh [selftest]
+#        selftest: 无需手机, 验证本机 mDNS 收发链路是否正常
 # 环境变量: ADB, PAIR_TIMEOUT(秒, 默认 120, mDNS 监听总时长), PAIR_CMD_TIMEOUT(秒, 默认 15,
 #          单次 adb pair 超时; adb pair 在配对握手未完成时会无限挂起, 必须兜底),
-#          QR_SCALE(默认 6)
+#          AUTO_CONNECT_WAIT(秒, 默认 15, 配对成功后轮询等待 adb 自动连接的总时长),
+#          QR_SCALE(默认 6), DEBUG(=1 时保留自动连接阶段的 mDNS 原始输出并在结束时打印路径;
+#          注: 配对阶段的 mDNS 输出走 FIFO 已被实时消费, 不予保留, 诊断用 selftest)
 
 set -eu
 
@@ -29,9 +32,29 @@ fi
 DNS_DOMAIN="_adb-tls-pairing._tcp"
 PAIR_TIMEOUT=${PAIR_TIMEOUT:-120}
 PAIR_CMD_TIMEOUT=${PAIR_CMD_TIMEOUT:-15}
+AUTO_CONNECT_WAIT=${AUTO_CONNECT_WAIT:-15}
 QR_SCALE=${QR_SCALE:-6}
+DEBUG=${DEBUG:-0}
+
+# DEBUG=1 时中间产物 (FIFO/mDNS 原始输出) 不删除而是登记, 便于失败后查看现场
+kept_files=
+cleanup_file() {
+  for _f in "$@"; do
+    if [ "$DEBUG" = "1" ]; then
+      kept_files="$kept_files $_f"
+    else
+      rm -f "$_f"
+    fi
+  done
+}
+print_kept() {
+  if [ "$DEBUG" = "1" ] && [ -n "$kept_files" ]; then
+    echo "[DEBUG] 现场文件已保留:$kept_files" >&2
+  fi
+}
 
 die() {
+  print_kept
   echo "错误: $*" >&2
   exit 1
 }
@@ -45,6 +68,81 @@ command -v timeout >/dev/null 2>&1 || command -v perl >/dev/null 2>&1 || \
 # mDNS 发现: macOS 自带 dns-sd; Linux 需要 avahi-utils 的 avahi-browse
 command -v dns-sd >/dev/null 2>&1 || command -v avahi-browse >/dev/null 2>&1 || \
   die "未找到 mDNS 发现工具 (macOS 自带 dns-sd; Linux 请安装 avahi-utils: apt install avahi-utils / yum install avahi-tools / pacman -S avahi)"
+
+# ---- selftest 子命令: 无需手机, 验证本机 mDNS 收发链路 ----
+# 注册一个假 _adb-tls-connect 实例 -> browse 应能看到 -> -L 应能解析出地址.
+# 用于把两类故障切开:
+#   selftest 失败 -> 本机 mDNS 异常 (常见: VPN/代理 utun 拦截组播), 先解决本机问题
+#   selftest 通过但配对时发现不了手机 -> 手机侧不广播 (ROM 仅前台广播) 或 AP 隔离
+_run_bounded() {
+  _s=$1; shift
+  "$@" &
+  _bp=$!
+  sleep "$_s"
+  kill "$_bp" 2>/dev/null || true
+  wait "$_bp" 2>/dev/null || true
+}
+
+selftest() {
+  _port=$((40000 + $$ % 10000))
+  _inst="selftest-$$"
+  if command -v dns-sd >/dev/null 2>&1; then
+    dns-sd -R "$_inst" _adb-tls-connect._tcp local. "$_port" >/dev/null 2>&1 &
+    _pub=$!
+  elif command -v avahi-publish >/dev/null 2>&1; then
+    avahi-publish -s "$_inst" _adb-tls-connect._tcp "$_port" >/dev/null 2>&1 &
+    _pub=$!
+  else
+    echo "selftest: 需要 dns-sd (macOS 自带) 或 avahi-publish (Linux: avahi-utils)" >&2
+    return 2
+  fi
+  sleep 1
+  _rc=0
+  _tmp1=$(mktemp)
+  _tmp2=$(mktemp)
+  if command -v dns-sd >/dev/null 2>&1; then
+    _run_bounded 4 dns-sd -B _adb-tls-connect._tcp local. >"$_tmp1" 2>&1
+    if grep -q "Add.*$_inst" "$_tmp1"; then
+      echo "  [OK] browse 能看到本机注册的测试服务"
+      _run_bounded 4 dns-sd -L "$_inst" _adb-tls-connect._tcp local. >"$_tmp2" 2>&1
+      if grep -q "can be reached at" "$_tmp2"; then
+        echo "  [OK] -L 能解析出地址: $(sed -n 's/.*can be reached at //p' "$_tmp2" | head -1)"
+      else
+        echo "  [FAIL] -L 未解析出地址 (browse 可见但解析失败, 本机 mDNS 栈异常)" >&2
+        _rc=1
+      fi
+    else
+      echo "  [FAIL] browse 看不到本机注册的服务 (组播被 VPN/代理拦截?)" >&2
+      _rc=1
+    fi
+  else
+    _run_bounded 4 avahi-browse -r _adb-tls-connect._tcp >"$_tmp1" 2>&1
+    if grep -q "= .*$_inst" "$_tmp1" && grep -q "port = \[" "$_tmp1"; then
+      echo "  [OK] avahi-browse 能发现并解析本机注册的测试服务"
+    else
+      echo "  [FAIL] avahi-browse 看不到本机注册的服务 (avahi-daemon 未运行?)" >&2
+      _rc=1
+    fi
+  fi
+  kill "$_pub" 2>/dev/null || true
+  wait "$_pub" 2>/dev/null || true
+  if [ "$_rc" -eq 0 ]; then
+    cleanup_file "$_tmp1" "$_tmp2"
+    echo "selftest 通过: 本机 mDNS 收发正常. 若配对时发现不了手机, 问题在手机侧广播 (如仅前台广播的 ROM) 或网络隔离 (AP 隔离/访客网络), 而不是本机."
+  else
+    kept_files="$kept_files $_tmp1 $_tmp2"
+    print_kept
+    echo "selftest 失败: 本机 mDNS 链路异常, 本机问题解决前配对/自动连接都会失败." >&2
+  fi
+  return "$_rc"
+}
+
+case "${1:-}" in
+  selftest)
+    selftest
+    exit $?
+    ;;
+esac
 
 # 生成 n 位随机字母 (与 Go 实现一致; 手机端只要求 S/P 非空)
 rand_letters() {
@@ -149,73 +247,210 @@ start_discovery() {
   fi
 }
 
-# 配对成功后自动连接: 先等 adb 自带 mDNS 自动连接 (_adb-tls-connect) 完成;
-# 未生效时 (容器/VM 等组播受限环境 adb 的 mDNS 不可用), 用 avahi-browse 解析
-# _adb-tls-connect 手动 connect 兜底, 失败则延时重试 (配对刚完成时手机的
+# adb server 对带结尾点的 mDNS FQDN (如 Android.local.) 解析并不稳定。
+# adb mdns services 已优先提供直接 IP；dns-sd 兜底端点只需去掉结尾点。
+connect_endpoints() {
+  _raw_ep=$1
+  case "$_raw_ep" in
+    \[*\]:*)
+      printf '%s\n' "$_raw_ep"
+      return
+      ;;
+  esac
+  _raw_host=${_raw_ep%:*}
+  _raw_port=${_raw_ep##*:}
+  _raw_host=${_raw_host%.}
+  printf '%s:%s\n' "$_raw_host" "$_raw_port"
+}
+
+# 成功返回 0；失败时保留 adb 的原始错误，避免 grep 吞掉
+# "Connection refused" / "unknown host" 等真正原因。
+try_connect_endpoint() {
+  _service=${1:-unknown}
+  _raw_ep=$2
+  _candidates=$(connect_endpoints "$_raw_ep" | awk '!seen[$0]++')
+  for _candidate in $_candidates; do
+    echo "发现 connect 服务: $_service -> $_candidate" >&2
+    echo "\$ $ADB connect $_candidate"
+    _connect_rc=0
+    _connect_out=$("$ADB" connect "$_candidate" 2>&1) || _connect_rc=$?
+    printf '%s\n' "$_connect_out"
+    if [ "$_connect_rc" -eq 0 ] && printf '%s\n' "$_connect_out" | grep -q "connected to"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# adb 自己的 mDNS 列表直接给出 IP:端口，比把 dns-sd 的 .local. 主机名再交回
+# adb server 更可靠。只接受本次 pair 返回的 guid 及 Bonjour 为同名新广播追加的
+# " (N)" 实例，避免连到局域网中的其他设备。
+try_adb_mdns_connect() {
+  _wanted_guid=$1
+  _mdns_tmp=$2
+  "$ADB" mdns services >"$_mdns_tmp" 2>&1 || return 1
+  _mdns_eps=$(awk -v guid="$_wanted_guid" '
+    $(NF-1) ~ /^_adb-tls-connect\._tcp\.?$/ {
+      name=$1
+      for (i=2; i<=NF-2; i++) name=name " " $i
+      if (guid == "" || name == guid || index(name, guid " (") == 1) print name "|" $NF
+    }
+  ' "$_mdns_tmp" | sort -r)
+  [ -n "$_mdns_eps" ] || return 1
+  _advertised=1
+  while IFS='|' read -r _mdns_name _mdns_ep; do
+    [ -n "$_mdns_ep" ] || continue
+    if try_connect_endpoint "$_mdns_name" "$_mdns_ep"; then
+      return 0
+    fi
+  done <<EOF
+$_mdns_eps
+EOF
+  return 1
+}
+
+# 配对成功后自动连接: 先轮询等 adb 自带 mDNS 自动连接 (_adb-tls-connect) 完成
+# (固定 sleep 2 太短, VPN/代理下 adb 的连接常要 5-15s); 未生效时解析
+# _adb-tls-connect 手动 connect 兜底: Linux 用 avahi-browse, macOS 用 dns-sd -L
+# (实例名 = 配对输出的 guid，或 Bonjour 冲突后缀 guid (N)), 各自失败则重试 (配对刚完成时手机的
 # connect 监听器可能还没就绪). $1 = guid (adb-xxxx 实例名, 来自配对输出,
 # 用于过滤出刚配对的那台手机; 为空则取第一个可解析实例)
 auto_connect() {
   _guid=${1:-}
-  sleep 2   # 等 adb 自动 connect (mDNS _adb-tls-connect) 完成
-  if "$ADB" devices | grep -qE '[[:space:]]device([[:space:]]|$)'; then
-    "$ADB" devices -l || true
-    return 0
-  fi
-  if ! command -v avahi-browse >/dev/null 2>&1; then
-    echo "提示: adb 自动连接未生效, 请稍后手动执行: $ADB connect <手机ip>:<无线调试端口>" >&2
-    "$ADB" devices -l || true
-    return 0
-  fi
-  echo "adb 自带 mDNS 自动连接未生效, 用 avahi 解析 _adb-tls-connect 手动连接..." >&2
-  _tmp=$(mktemp)
-  _epsf=$(mktemp)
-  _attempt=1
-  while [ "$_attempt" -le 3 ]; do
-    # 每次重新解析, 拿到手机最新广播的无线调试端口 (配对后端口可能变更);
-    # 注意: 带引号的 case 模式不能放进 $(...) (bash 3.2 解析 bug), 这里用临时文件收集
-    run_with_timeout 4 avahi-browse -r _adb-tls-connect._tcp >"$_tmp" 2>&1 || true
-    _host=
-    _port=
-    _match=0
-    while IFS= read -r _l; do
-      case "$_l" in
-        "+ "*|"- "*|"= "*)        # 服务事件行: 记录当前实例名, 按 guid 过滤
-          set -- $_l
-          if [ -n "$_guid" ]; then
-            [ "$4" = "$_guid" ] && _match=1 || _match=0
-          else
-            _match=1
-          fi
-          ;;
-        *"address = ["*)
-          [ "$_match" = "1" ] && { _host=${_l##*"address = ["}; _host=${_host%%]*}; }
-          ;;
-        *"port = ["*)
-          if [ "$_match" = "1" ] && [ -n "$_host" ]; then
-            _port=${_l##*"port = ["}; _port=${_port%%]*}
-            [ -n "$_port" ] && echo "$_host:$_port"
-          fi
-          ;;
-      esac
-    done <"$_tmp" >"$_epsf"
-    _eps=$(sort -u "$_epsf")
-    if [ -n "$_eps" ]; then
-      for _ep in $_eps; do
-        echo "\$ $ADB connect $_ep"
-        if "$ADB" connect "$_ep" 2>&1 | grep -q "connected to"; then
-          rm -f "$_tmp" "$_epsf"
-          "$ADB" devices -l || true
-          return 0
-        fi
-      done
-    else
-      echo "未解析到 _adb-tls-connect (第 $_attempt 次)" >&2
+  _advertised=0
+  _waited=0
+  while [ "$_waited" -lt "$AUTO_CONNECT_WAIT" ]; do
+    if "$ADB" devices | grep -qE '[[:space:]]device([[:space:]]|$)'; then
+      if [ "$_waited" -gt 2 ]; then
+        echo "adb 自动连接生效 (共等待 ${_waited}s)" >&2
+      fi
+      "$ADB" devices -l || true
+      return 0
     fi
-    [ "$_attempt" -lt 3 ] && { echo "手机 connect 监听器可能未就绪, ${_attempt} 次后重试..." >&2; sleep 3; }
-    _attempt=$((_attempt + 1))
+    sleep 1
+    _waited=$((_waited + 1))
   done
-  rm -f "$_tmp" "$_epsf"
-  echo "自动连接失败, 请稍后手动执行: $ADB connect <手机ip>:<无线调试端口>" >&2
+  _tmpm=$(mktemp)
+  if try_adb_mdns_connect "$_guid" "$_tmpm"; then
+    cleanup_file "$_tmpm"
+    "$ADB" devices -l || true
+    return 0
+  fi
+  cleanup_file "$_tmpm"
+  if command -v avahi-browse >/dev/null 2>&1; then
+    echo "adb 自动连接未生效, 用 avahi 解析 _adb-tls-connect 手动连接..." >&2
+    _tmp=$(mktemp)
+    _epsf=$(mktemp)
+    _attempt=1
+    while [ "$_attempt" -le 3 ]; do
+      # 每次重新解析, 拿到手机最新广播的无线调试端口 (配对后端口可能变更);
+      # 注意: 带引号的 case 模式不能放进 $(...) (bash 3.2 解析 bug), 这里用临时文件收集
+      run_with_timeout 4 avahi-browse -r _adb-tls-connect._tcp >"$_tmp" 2>&1 || true
+      _host=
+      _port=
+      _match=0
+      while IFS= read -r _l; do
+        case "$_l" in
+          "+ "*|"- "*|"= "*)        # 服务事件行: 记录当前实例名, 按 guid 过滤
+            # 按 avahi 的固定空白字段格式拆分。
+            # shellcheck disable=SC2086
+            set -- $_l
+            if [ -n "$_guid" ]; then
+              [ "$4" = "$_guid" ] && _match=1 || _match=0
+            else
+              _match=1
+            fi
+            ;;
+          *"address = ["*)
+            [ "$_match" = "1" ] && { _host=${_l##*"address = ["}; _host=${_host%%]*}; }
+            ;;
+          *"port = ["*)
+            if [ "$_match" = "1" ] && [ -n "$_host" ]; then
+              _port=${_l##*"port = ["}; _port=${_port%%]*}
+              [ -n "$_port" ] && echo "$_host:$_port"
+            fi
+            ;;
+        esac
+      done <"$_tmp" >"$_epsf"
+      _eps=$(sort -u "$_epsf")
+      if [ -n "$_eps" ]; then
+        _advertised=1
+        for _ep in $_eps; do
+          if try_connect_endpoint "${_guid:-avahi}" "$_ep"; then
+            cleanup_file "$_tmp" "$_epsf"
+            "$ADB" devices -l || true
+            return 0
+          fi
+        done
+      else
+        echo "未解析到 _adb-tls-connect (第 $_attempt 次)" >&2
+      fi
+      [ "$_attempt" -lt 3 ] && { echo "手机 connect 监听器可能未就绪, ${_attempt} 次后重试..." >&2; sleep 3; }
+      _attempt=$((_attempt + 1))
+    done
+    cleanup_file "$_tmp" "$_epsf"
+  elif command -v dns-sd >/dev/null 2>&1; then
+    echo "adb 自动连接未生效, 用 dns-sd 解析 _adb-tls-connect 手动连接..." >&2
+    _tmpb=$(mktemp)
+    _tmpl=$(mktemp)
+    _attempt=1
+    while [ "$_attempt" -le 3 ]; do
+      # Bonjour 在旧端口记录尚未过期、手机已广播新端口时，会将同名新实例
+      # 重命名为 "<guid> (2)"。接受这些碰撞后缀并倒序尝试，使新端口优先。
+      # 没有 guid (兼容旧 adb 输出) 时才尝试当前发现的全部实例。
+      run_with_timeout 4 dns-sd -B _adb-tls-connect._tcp local. >"$_tmpb" 2>&1 || true
+      _insts=$(sed -n 's/.*Add.*_adb-tls-connect\._tcp\. //p' "$_tmpb" | sort -u)
+      _ordered=
+      if [ -n "$_guid" ]; then
+        _ordered=$(printf '%s\n' "$_insts" |
+          awk -v guid="$_guid" '$0 == guid || index($0, guid " (") == 1' |
+          sort -r)
+        if [ -n "$_ordered" ]; then
+          _advertised=1
+        fi
+      else
+        _ordered=$_insts
+        if [ -n "$_ordered" ]; then
+          _advertised=1
+        fi
+      fi
+      if [ -n "$_ordered" ]; then
+        while IFS= read -r _inst; do
+          [ -n "$_inst" ] || continue
+          # dns-sd -L 输出与配对阶段相同的 "can be reached at <host>:<port> (interface N)",
+          # 可能每个接口一行; 逐个尝试 connect, 不可达的 (如 link-local IPv6) 自然失败跳过
+          run_with_timeout 4 dns-sd -L "$_inst" _adb-tls-connect._tcp local. >"$_tmpl" 2>&1 || true
+          _eps=$(sed -n 's/.*can be reached at //p' "$_tmpl" | sed 's/ (interface .*//' | sort -u)
+          for _ep in $_eps; do
+            if try_connect_endpoint "$_inst" "$_ep"; then
+              cleanup_file "$_tmpb" "$_tmpl"
+              "$ADB" devices -l || true
+              return 0
+            fi
+          done
+        done <<EOF
+$_ordered
+EOF
+        echo "发现服务实例但未连上 (第 $_attempt 次)" >&2
+      else
+        echo "未发现 _adb-tls-connect 广播 (第 $_attempt 次)" >&2
+      fi
+      [ "$_attempt" -lt 3 ] && { echo "手机 connect 监听器可能未就绪, ${_attempt} 次后重试..." >&2; sleep 3; }
+      _attempt=$((_attempt + 1))
+    done
+    cleanup_file "$_tmpb" "$_tmpl"
+  else
+    echo "提示: adb 自动连接未生效 (无 dns-sd/avahi-browse 可用), 请手动执行: $ADB connect <手机ip>:<无线调试端口>" >&2
+    "$ADB" devices -l || true
+    return 0
+  fi
+  # 按是否见过广播分流收尾提示, 给出可直接执行的下一步, 而不是笼统让用户自己排查
+  if [ "$_advertised" = "1" ]; then
+    echo "自动连接失败: 已发现服务实例但连接未成功. 请检查手机与电脑是否在同一网段、路由器是否开了 AP 隔离/访客网络; 或按手机『无线调试』页面显示的地址手动执行: $ADB connect <手机ip>:<无线调试端口>" >&2
+  else
+    echo "自动连接失败: 手机未广播 _adb-tls-connect (小米/HyperOS 等 ROM 仅在『无线调试』页面处于前台时广播, 详见 selftest 判别). 请保持手机停留在该页面后重跑本脚本, 或按页面显示的 IP:端口 手动执行: $ADB connect <手机ip>:<无线调试端口>" >&2
+  fi
+  print_kept
   "$ADB" devices -l || true
 }
 
@@ -224,7 +459,6 @@ auto_connect() {
 try_pair() {
   echo "发现设备: $2:$3"
   echo "\$ $ADB pair $1 $PSK"
-  last_host=$2
   rc=0
   # 捕获输出: 部分 adb (Linux 发行版自带常见) 客户端误报
   # "protocol fault (couldn't read status message)" (误导性, 配对实际在手机端完成),
@@ -276,7 +510,6 @@ exec 3<"$fifo"
 pair_ok=0
 host=
 port=
-last_host=
 avahi_skip=0
 while IFS= read -r line <&3; do
   case "$line" in
@@ -328,6 +561,7 @@ while IFS= read -r line <&3; do
       # 1) 跳过 VPN/代理虚拟接口 (tun/utun/wg 等) 广播的服务, 避免拿到假 IP (如 192.168.139.x) 去配对
       # 2) 只处理实例名 == SVC_ID 的广播 (avahi-browse 不能像 dns-sd -L 那样按实例名过滤;
       #    不过滤会把其他设备/历史会话的配对实例也拿去配对, 用错误的 PSK 握手必然失败)
+      # shellcheck disable=SC2086
       set -- $line
       case "${2:-}" in
         tun*|utun*|wg*|tap*|virbr*|docker*|br-*|tailscale*|Meta*|sing-box*) avahi_skip=1 ;;
@@ -349,13 +583,6 @@ discover_rc=0
 wait "$discover_pid" 2>/dev/null || discover_rc=$?
 exec 3<&- || true
 rm -rf "$fifo_dir"
-
-# 循环结束后再确认一次: 自动连接可能较慢, 配对其实已成功 (设备稍后才上线)
-if [ "$pair_ok" -eq 0 ] && [ -n "$last_host" ] && "$ADB" devices | grep -qF "$last_host:"; then
-  echo "配对成功! (设备已连接)"
-  "$ADB" devices -l || true
-  pair_ok=1
-fi
 
 if [ "$pair_ok" -eq 1 ]; then
   exit 0
