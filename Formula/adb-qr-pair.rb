@@ -3,7 +3,7 @@ class AdbQrPair < Formula
   homepage "https://github.com/yinzhenyu-su/homebrew-tools"
   url "https://github.com/yinzhenyu-su/homebrew-tools/archive/adb-qr-pair-v1.1.0.tar.gz"
   version "1.1.0"
-  sha256 "811a7e9857481fa6f96944515cd8ac9480f9c2f02bfca8eb6ff66accb7e87a6e"
+  sha256 "858fae3bf6cbda58bbc2344c9c6b176e7571f0cfb7e5cf3dbfbfa3a84d43ff10"
 
   depends_on "qrencode"
 
