@@ -1,3 +1,5 @@
+
+
 # Homebrew Tools
 
 Claude Code 模型切换工具、adb 无线调试配对工具等的 Homebrew 包集合。
@@ -6,7 +8,7 @@ Claude Code 模型切换工具、adb 无线调试配对工具等的 Homebrew 包
 
 ### Switch Claude
 
-一个强大的 Claude Code 模型切换脚本，支持在 GLM、Kimi、Minimax 等模型之间快速切换。
+一个强大的 Claude Code 模型切换脚本，支持在 GLM、Kimi、Minimax 等模型之间快速切换。Homebrew 安装后提供 `switch-claude`、`claude-switch` 与 `sc` 三个等价命令。
 
 📖 详细用法见 [Switch Claude 使用指南](docs/switch-claude/usage.md)
 
